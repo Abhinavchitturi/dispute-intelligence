@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  resolveiq:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - RESOLVEIQ_MODE=demo
+      - DEBUG=true
+      - DATABASE_URL=sqlite:///./resolveiq.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
