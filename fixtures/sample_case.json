@@ -1,0 +1,89 @@
+{
+  "_note": "Hand-written FAKE case for development. Not real PayPal data. Shapes are simplified, not verified against the sandbox.",
+  "case_id": "CASE-1",
+  "reason": "ITEM_NOT_RECEIVED",
+  "records": [
+    {
+      "id": "DSP-1",
+      "type": "dispute",
+      "external_id": "PP-D-FAKE-0001",
+      "synthetic": false,
+      "data": {
+        "status": "WAITING_FOR_SELLER_RESPONSE",
+        "reason": "ITEM_NOT_RECEIVED",
+        "amount": { "currency": "USD", "value": "49.99" },
+        "created_at": "2026-10-20T14:05:00Z",
+        "seller_response_due": "2026-10-30T23:59:00Z",
+        "buyer_id": "BUYER-A",
+        "seller_id": "SELLER-A",
+        "buyer_claim": "Package never arrived."
+      }
+    },
+    {
+      "id": "ORD-1",
+      "type": "order",
+      "external_id": "FAKE-ORDER-0001",
+      "synthetic": false,
+      "data": {
+        "status": "COMPLETED",
+        "created_at": "2026-10-08T09:12:00Z",
+        "item": "Wireless earbuds",
+        "amount": { "currency": "USD", "value": "49.99" },
+        "ship_to_city": "Austin, TX"
+      }
+    },
+    {
+      "id": "TXN-1",
+      "type": "transaction",
+      "external_id": "FAKE-CAPTURE-0001",
+      "synthetic": false,
+      "data": {
+        "status": "COMPLETED",
+        "captured_at": "2026-10-08T09:13:00Z",
+        "amount": { "currency": "USD", "value": "49.99" },
+        "order": "ORD-1"
+      }
+    },
+    {
+      "id": "TRK-1",
+      "type": "tracking",
+      "external_id": "FAKE-TRACK-9400111",
+      "synthetic": false,
+      "data": {
+        "carrier": "USPS",
+        "tracking_number": "9400111FAKE",
+        "status": "SHIPPED",
+        "event_at": "2026-10-10T16:30:00Z",
+        "note": "Label created and handed to carrier. No later events."
+      }
+    },
+    {
+      "id": "MSG-1",
+      "type": "message",
+      "external_id": null,
+      "synthetic": true,
+      "data": {
+        "from": "buyer",
+        "sent_at": "2026-10-19T18:40:00Z",
+        "text": "It has been 11 days and nothing has arrived. Can you check?"
+      }
+    },
+    {
+      "id": "MSG-2",
+      "type": "message",
+      "external_id": null,
+      "synthetic": true,
+      "data": {
+        "from": "seller",
+        "sent_at": "2026-10-19T20:02:00Z",
+        "text": "It shipped on the 10th, tracking shows it is with USPS."
+      }
+    }
+  ],
+  "expected_checker_output": {
+    "_note": "What the rule-based evidence checker should produce for this case. Used as a test.",
+    "present": ["order", "transaction", "tracking (shipped only)"],
+    "missing": ["proof of delivery", "any tracking event after 2026-10-10"],
+    "unsupported_claims_to_reject": ["The package was delivered on Oct 14"]
+  }
+}
