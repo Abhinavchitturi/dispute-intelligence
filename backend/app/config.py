@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     AI_API_KEY: Optional[str] = None
     AI_MODEL: str = "gemini-1.5-pro"
     
+    # Demo mode: seconds before a simulated PayPal/buyer reply arrives
+    DEMO_REPLY_DELAY_SECONDS: int = 20
+
     # Security
     SECRET_KEY: str = "resolveiq-hackathon-local-secret-key-38912"
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000"

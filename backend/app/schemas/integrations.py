@@ -20,7 +20,9 @@ class DashboardSummaryResponse(BaseModel):
     total_open_disputes: int
     approaching_deadline_count: int
     missing_evidence_count: int
-    awaiting_review_count: int
+    awaiting_review_count: int      # evidence is in: ready for PayPal to decide
+    new_cases_count: int = 0        # nobody has been asked for anything yet
+    waiting_on_parties_count: int = 0  # waiting on the seller and/or buyer to reply
     disputes_by_reason: List[Dict[str, Any]]
     priority_distribution: Dict[str, int]
     recent_activity: List[Dict[str, Any]]

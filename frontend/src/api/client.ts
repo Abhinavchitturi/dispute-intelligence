@@ -8,7 +8,11 @@ import {
   DashboardSummary,
   IntegrationStatus,
   ActionPreviewResult,
-  ActionExecuteResult
+  ActionExecuteResult,
+  ActionDraft,
+  EvidenceRequestOptions,
+  DisputeMessage,
+  MessageThreadSummary
 } from '../types';
 
 const API_BASE = '/api';
@@ -127,12 +131,17 @@ export async function resetDemoData(): Promise<any> {
   return res.json();
 }
 
+export async function fetchEvidenceOptions(disputeId: string): Promise<EvidenceRequestOptions> {
+  const res = await fetch(`${API_BASE}/disputes/${disputeId}/evidence-requests/options`);
+  if (!res.ok) throw new Error('Failed to fetch evidence options');
+  return res.json();
+}
+
 export async function previewAction(disputeId: string, payload: {
   action_type: string;
   notes?: string;
-  evidence_type?: string;
-  tracking_number?: string;
-  carrier?: string;
+  requested_evidence?: string[];
+  deadline_days?: number;
 }): Promise<ActionPreviewResult> {
   const res = await fetch(`${API_BASE}/disputes/${disputeId}/actions/preview`, {
     method: 'POST',
@@ -143,13 +152,28 @@ export async function previewAction(disputeId: string, payload: {
   return res.json();
 }
 
+export async function draftActionMessage(disputeId: string, payload: {
+  action_type: string;
+  requested_evidence?: string[];
+  deadline_days?: number;
+}): Promise<ActionDraft> {
+  const res = await fetch(`${API_BASE}/disputes/${disputeId}/actions/draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) throw new Error('Failed to draft message');
+  return res.json();
+}
+
 export async function executeAction(disputeId: string, payload: {
   action_type: string;
   confirmed: boolean;
+  message?: string;
+  subject?: string;
   notes?: string;
-  evidence_type?: string;
-  tracking_number?: string;
-  carrier?: string;
+  requested_evidence?: string[];
+  deadline_days?: number;
 }): Promise<ActionExecuteResult> {
   const res = await fetch(`${API_BASE}/disputes/${disputeId}/actions/execute`, {
     method: 'POST',
@@ -159,6 +183,39 @@ export async function executeAction(disputeId: string, payload: {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || 'Failed to execute action');
+  }
+  return res.json();
+}
+
+export async function fetchHealth(): Promise<{ status: string; mode: string }> {
+  const res = await fetch(`${API_BASE}/health`);
+  if (!res.ok) throw new Error('Backend unreachable');
+  return res.json();
+}
+
+export async function fetchMessageThreads(): Promise<MessageThreadSummary[]> {
+  const res = await fetch(`${API_BASE}/message-threads`);
+  if (!res.ok) throw new Error('Failed to fetch message threads');
+  return res.json();
+}
+
+export async function fetchDisputeMessages(disputeId: string): Promise<DisputeMessage[]> {
+  const res = await fetch(`${API_BASE}/disputes/${disputeId}/messages`);
+  if (!res.ok) throw new Error('Failed to fetch messages');
+  return res.json();
+}
+
+export async function markMessagesRead(disputeId: string): Promise<{ marked_read: number }> {
+  const res = await fetch(`${API_BASE}/disputes/${disputeId}/messages/read`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to mark messages read');
+  return res.json();
+}
+
+export async function simulateReply(messageId: string): Promise<DisputeMessage> {
+  const res = await fetch(`${API_BASE}/messages/${messageId}/simulate-reply`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to simulate reply');
   }
   return res.json();
 }

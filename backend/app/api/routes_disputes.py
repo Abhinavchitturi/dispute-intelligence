@@ -28,40 +28,41 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
     """Aggregates real database metrics for the overview dashboard."""
     now = datetime.utcnow()
     
-    # 1. Total Open Disputes
-    open_statuses = ["WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "UNDER_REVIEW"]
+    # 1. Open disputes: anything PayPal hasn't decided yet
+    open_statuses = ["OPEN", "WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "WAITING_FOR_BOTH_RESPONSES", "UNDER_REVIEW"]
     total_open = db.query(Dispute).filter(Dispute.status.in_(open_statuses)).count()
-    
-    # 2. Approaching Response Deadlines (< 48 hrs)
+
+    # 2. Decision targets coming up (< 48 hrs) or already missed
     approaching = db.query(Dispute).filter(
         Dispute.status.in_(open_statuses),
         Dispute.response_due_date.isnot(None),
         Dispute.response_due_date <= (now + timedelta(hours=48))
     ).count()
 
-    # 3. Missing Evidence
+    # 3. Missing or conflicting evidence
     missing_evidence = db.query(Dispute).filter(
         Dispute.status.in_(open_statuses),
         Dispute.evidence_status.in_(["MISSING", "CONFLICTING"])
     ).count()
 
-    # 4. Awaiting Review
-    awaiting_review = db.query(Dispute).filter(
-        Dispute.status == "WAITING_FOR_SELLER_RESPONSE"
-    ).count()
+    # 4. Where each open case sits
+    awaiting_review = db.query(Dispute).filter(Dispute.status == "UNDER_REVIEW").count()
+    new_cases = db.query(Dispute).filter(Dispute.status == "OPEN").count()
+    waiting_on_parties = db.query(Dispute).filter(Dispute.status.in_(
+        ["WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "WAITING_FOR_BOTH_RESPONSES"])).count()
 
     # 5. Volume by Reason
     reason_counts = {}
-    for dsp in db.query(Dispute.reason).all():
+    for dsp in db.query(Dispute.reason).filter(Dispute.status.in_(open_statuses)).all():
         r = dsp[0]
         reason_counts[r] = reason_counts.get(r, 0) + 1
     
     disputes_by_reason = [{"reason": k, "count": v} for k, v in reason_counts.items()]
 
     # 6. Priority Distribution
-    p_high = db.query(Dispute).filter(Dispute.priority_score >= 70).count()
-    p_med = db.query(Dispute).filter(Dispute.priority_score >= 40, Dispute.priority_score < 70).count()
-    p_low = db.query(Dispute).filter(Dispute.priority_score < 40).count()
+    p_high = db.query(Dispute).filter(Dispute.status.in_(open_statuses), Dispute.priority_score >= 70).count()
+    p_med = db.query(Dispute).filter(Dispute.status.in_(open_statuses), Dispute.priority_score >= 40, Dispute.priority_score < 70).count()
+    p_low = db.query(Dispute).filter(Dispute.status.in_(open_statuses), Dispute.priority_score < 40).count()
 
     # 7. Recent Activity (last 6 audit events)
     recent_events = (
@@ -94,6 +95,8 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         approaching_deadline_count=approaching,
         missing_evidence_count=missing_evidence,
         awaiting_review_count=awaiting_review,
+        new_cases_count=new_cases,
+        waiting_on_parties_count=waiting_on_parties,
         disputes_by_reason=disputes_by_reason,
         priority_distribution={"high": p_high, "medium": p_med, "low": p_low},
         recent_activity=recent_activity,
@@ -187,7 +190,8 @@ def list_disputes(
             priority_score=d.priority_score,
             priority_factors=factors,
             evidence_status=d.evidence_status,
-            buyer_claim=d.buyer_claim
+            buyer_claim=d.buyer_claim,
+            outcome=d.outcome
         )
         results.append(item)
 
@@ -229,6 +233,7 @@ def get_dispute_detail(dispute_id: str, db: Session = Depends(get_db)):
         priority_factors=factors,
         evidence_status=dispute.evidence_status,
         buyer_claim=dispute.buyer_claim,
+        outcome=dispute.outcome,
         transaction=dispute.transaction,
         order=dispute.order,
         evidence_items=dispute.evidence_items,

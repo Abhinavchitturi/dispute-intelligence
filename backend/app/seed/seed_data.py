@@ -6,6 +6,7 @@ from backend.app.models.dispute import Dispute, Transaction, Order, Shipment
 from backend.app.models.evidence import Evidence
 from backend.app.models.brief import HistoricalCase
 from backend.app.models.audit import AuditEvent
+from backend.app.models.message import DisputeMessage
 from backend.app.services.priority_service import calculate_priority_score
 
 def seed_database(db: Session = None) -> None:
@@ -18,6 +19,7 @@ def seed_database(db: Session = None) -> None:
 
     try:
         # Clear existing synthetic demo data
+        db.query(DisputeMessage).filter(DisputeMessage.source == "synthetic").delete()
         db.query(AuditEvent).filter(AuditEvent.source == "synthetic").delete()
         db.query(Evidence).filter(Evidence.source == "synthetic").delete()
         db.query(Dispute).filter(Dispute.source == "synthetic").delete()
@@ -82,7 +84,7 @@ def seed_database(db: Session = None) -> None:
             buyer_reference="Alex Morgan (alex_m_demo)",
             merchant_reference="TechStore",
             reason="MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
-            status="WAITING_FOR_SELLER_RESPONSE",
+            status="OPEN",
             amount=450.00,
             currency="USD",
             response_due_date=now + timedelta(days=2, hours=4),
@@ -158,7 +160,7 @@ def seed_database(db: Session = None) -> None:
             status="SUCCESS",
             source="synthetic",
             request_reference="WH-EVT-77218",
-            result_summary="Dispute ingested with status WAITING_FOR_SELLER_RESPONSE (Due in 52 hrs)",
+            result_summary="Dispute ingested with status OPEN (Decide within 52 hrs)",
             created_at=now - timedelta(days=1)
         )
         db.add(audit_1042)
@@ -191,7 +193,7 @@ def seed_database(db: Session = None) -> None:
                 "item": "Studio Monitor Speakers (Pair)",
                 "amount": 320.00,
                 "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
-                "status": "WAITING_FOR_BUYER_RESPONSE",
+                "status": "OPEN",
                 "due_hours": 12,
                 "buyer_claim": "Never received package. Tracking stuck in transit for 18 days.",
                 "evidence_status": "MISSING",
@@ -208,7 +210,7 @@ def seed_database(db: Session = None) -> None:
                 "item": "Ergonomic Mechanical Keyboard (RGB)",
                 "amount": 149.99,
                 "reason": "UNAUTHORISED",
-                "status": "WAITING_FOR_SELLER_RESPONSE",
+                "status": "OPEN",
                 "due_hours": 72,
                 "buyer_claim": "Account compromised. I did not place this order from this IP address.",
                 "evidence_status": "PARTIAL",
@@ -225,7 +227,7 @@ def seed_database(db: Session = None) -> None:
                 "item": "Chronograph Automatic Watch Sapphire Edition",
                 "amount": 1250.00,
                 "reason": "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED",
-                "status": "WAITING_FOR_SELLER_RESPONSE",
+                "status": "OPEN",
                 "due_hours": 18,
                 "buyer_claim": "Serial number does not match manufacturer warranty database. Suspected counterfeit.",
                 "evidence_status": "CONFLICTING",
@@ -259,7 +261,7 @@ def seed_database(db: Session = None) -> None:
                 "item": "USB-C Dual 4K Monitor Docking Station",
                 "amount": 210.00,
                 "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
-                "status": "WAITING_FOR_SELLER_RESPONSE",
+                "status": "OPEN",
                 "due_hours": 6,  # Imminent deadline!
                 "buyer_claim": "Carrier marked delivered but left at wrong street number.",
                 "evidence_status": "CONFLICTING",
@@ -293,7 +295,7 @@ def seed_database(db: Session = None) -> None:
                 "item": "Egyptian Cotton Percale Sheet Set (King)",
                 "amount": 280.00,
                 "reason": "CANCELLED_OR_RETURNED",
-                "status": "WAITING_FOR_SELLER_RESPONSE",
+                "status": "OPEN",
                 "due_hours": 48,
                 "buyer_claim": "Returned package according to merchant return instructions 10 days ago. Refund not received.",
                 "evidence_status": "PARTIAL",
@@ -310,7 +312,7 @@ def seed_database(db: Session = None) -> None:
                 "item": "Gaming Graphics Card RTX 4070 OC",
                 "amount": 599.99,
                 "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
-                "status": "WAITING_FOR_SELLER_RESPONSE",
+                "status": "OPEN",
                 "due_hours": 15,  # Imminent high amount
                 "buyer_claim": "Box arrived empty, sealed with clear tape. Graphics card missing.",
                 "evidence_status": "CONFLICTING",
@@ -344,7 +346,7 @@ def seed_database(db: Session = None) -> None:
                 "item": "Smart WiFi Mesh System (3-Pack)",
                 "amount": 299.99,
                 "reason": "DUPLICATE_TRANSACTION",
-                "status": "WAITING_FOR_SELLER_RESPONSE",
+                "status": "OPEN",
                 "due_hours": 80,
                 "buyer_claim": "Card was billed twice for the same single order item within 3 minutes.",
                 "evidence_status": "COMPLETE",
@@ -415,6 +417,7 @@ def seed_database(db: Session = None) -> None:
                 merchant_reference=c["merchant"],
                 reason=c["reason"],
                 status=c["status"],
+                outcome={"RESOLVED": "SELLER_FAVOR", "CLOSED": "BUYER_FAVOR"}.get(c["status"]),
                 amount=c["amount"],
                 currency="USD",
                 response_due_date=due_date,
@@ -755,3 +758,22 @@ def seed_database(db: Session = None) -> None:
 
 if __name__ == "__main__":
     seed_database()
+
+
+# Bump when the meaning of the demo data changes, so databases seeded earlier are refreshed once on startup.
+# v2: cases are seen from PayPal's side (OPEN means nobody has been asked for evidence yet).
+SEED_VERSION = "2"
+
+
+def ensure_seed_current(db: Session) -> str:
+    """Seeds an empty database, or re-seeds once if the loaded demo data predates SEED_VERSION. Returns what happened."""
+    from backend.app.models.meta import AppMeta
+
+    row = db.get(AppMeta, "seed_version")
+    empty = db.query(Dispute).count() == 0
+    if not empty and row is not None and row.value == SEED_VERSION:
+        return "current"
+    seed_database(db)
+    db.merge(AppMeta(key="seed_version", value=SEED_VERSION))
+    db.commit()
+    return "seeded" if empty else "refreshed"

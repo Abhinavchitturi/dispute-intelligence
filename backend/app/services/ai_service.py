@@ -104,7 +104,12 @@ class AIService:
                 }
 
         for evid in dispute.evidence_items:
+            try:
+                provided_by = (json.loads(evid.metadata_json) if evid.metadata_json else {}).get("provided_by")
+            except ValueError:
+                provided_by = None
             context["evidence_items"].append({
+                "provided_by": provided_by,
                 "id": evid.id,
                 "evidence_type": evid.evidence_type,
                 "description": evid.description,
@@ -219,7 +224,7 @@ class AIService:
                 reason_required=f"Crucial for establishing objective verification under PayPal {reason} dispute standards.",
                 current_status="UNSUBMITTED_IN_RECORDS",
                 supporting_record_ids=[m["id"]],
-                suggested_follow_up=f"Request documentation from merchant: {m['description']}."
+                suggested_follow_up=f"Ask for it: {m['description']}."
             )
             evidence_gaps.append(g_rec)
 
@@ -229,58 +234,69 @@ class AIService:
                 reason_required="Signature confirmation required for high-tier or contested deliveries.",
                 current_status="NOT_FOUND",
                 supporting_record_ids=[dsp_id],
-                suggested_follow_up="Verify whether shipping service included signature on delivery."
+                suggested_follow_up="Ask the seller whether the shipment was signed for."
             ))
 
-        # Recommendations (Strictly neutral; human review required)
+        # Recommendations for the PayPal investigator. Neutral: they say who to ask and what to check, never who should win.
+        have_ids = [dsp_id] + ([shipment["id"]] if shipment else [])
         if "NOT_RECEIVED" in reason.upper():
             if shipment and shipment.get("status") == "DELIVERED":
-                if shipment.get("delivery_address_match") == "unknown":
+                addr = shipment.get("delivery_address_match")
+                if addr == "unknown":
                     recommendations.append(Recommendation(
-                        recommendation="Request carrier geocoded delivery confirmation or direct signature proof from merchant before taking closing action.",
-                        rationale="Carrier reports delivered to general area, but buyer asserts non-receipt and specific street-level verification is absent in current records.",
-                        supporting_record_ids=[dsp_id, shipment["id"]],
-                        limitations="AI cannot verify third-party carrier internal route logs without direct carrier API integration.",
+                        recommendation="Ask the seller for a delivery signature or address verification, and ask the buyer for camera footage and their delivery address, before deciding.",
+                        rationale="The carrier says delivered, but the buyer says nothing arrived and nothing confirms the package reached the buyer's address.",
+                        supporting_record_ids=have_ids,
+                        limitations="A signature or address check can still miss a package taken after delivery.",
                         human_review_required=True
                     ))
-                elif shipment.get("delivery_address_match") == "no":
+                elif addr == "no":
                     recommendations.append(Recommendation(
-                        recommendation="Review misdelivery evidence. If delivery to incorrect address is confirmed, prepare to accept claim or offer reimbursement.",
-                        rationale="Records indicate delivery scan does not match buyer shipping address.",
-                        supporting_record_ids=[dsp_id, shipment["id"]],
-                        limitations="Carrier may have delivered to an authorized package locker or alternate pickup point.",
+                        recommendation="Ask the seller to respond to the address mismatch, then decide. The records point to a delivery at the wrong address.",
+                        rationale="The carrier's delivery location doesn't match the address on the order.",
+                        supporting_record_ids=have_ids,
+                        limitations="The carrier may have used an authorized locker or alternate pickup point.",
                         human_review_required=True
                     ))
                 else:
                     recommendations.append(Recommendation(
-                        recommendation="Provide tracking and delivery confirmation to buyer and request formal declaration if item is suspected stolen post-delivery.",
-                        rationale="Carrier confirms delivery to verified address matching order record.",
-                        supporting_record_ids=[dsp_id, shipment["id"]],
-                        limitations="Does not rule out mailroom or porch theft post-delivery.",
+                        recommendation="Ask the buyer for evidence of non-receipt, such as camera footage, before deciding. The carrier shows delivery to the matching address.",
+                        rationale="The carrier confirms delivery to the address on the order, so the buyer's claim needs supporting evidence.",
+                        supporting_record_ids=have_ids,
+                        limitations="This doesn't rule out a package taken after delivery.",
                         human_review_required=True
                     ))
             else:
                 recommendations.append(Recommendation(
-                    recommendation="Request updated carrier trace from merchant or initiate carrier loss inquiry.",
-                    rationale="Package does not have completed delivery scan in records.",
+                    recommendation="Ask the seller for an updated carrier trace before deciding.",
+                    rationale="There's no completed delivery scan in the records.",
                     supporting_record_ids=[dsp_id],
-                    limitations="Customs clearance or transit hub bottlenecks may delay tracking scans.",
+                    limitations="Customs or transit delays can hold up tracking scans.",
                     human_review_required=True
                 ))
         elif "NOT_AS_DESCRIBED" in reason.upper():
             recommendations.append(Recommendation(
-                recommendation="Request buyer return tracking or merchant replacement agreement.",
-                rationale="SNAD claims generally require inspection of condition discrepancy photos and merchant policy review.",
+                recommendation="Ask the buyer for photos of the item and the seller for the listing and any messages with the buyer, then compare them.",
+                rationale="Not-as-described claims depend on how the item differs from its listing.",
                 supporting_record_ids=[dsp_id],
-                limitations="Product condition cannot be physically verified by software.",
+                limitations="Software can't inspect the physical item.",
                 human_review_required=True
             ))
         else:
             recommendations.append(Recommendation(
-                recommendation="Review customer authentication logs and transaction history for anomaly check.",
-                rationale="Verify device, IP, and shipping address consistency across account history.",
+                recommendation="Review the account's sign-in and transaction history, and ask the buyer to confirm whether they authorized the payment.",
+                rationale="Check device, location and shipping address consistency across the account's history.",
                 supporting_record_ids=[dsp_id],
-                limitations="IP geolocations may be influenced by VPN or mobile carrier routing.",
+                limitations="IP locations can be skewed by VPNs or mobile carriers.",
+                human_review_required=True
+            ))
+
+        if not missing_evid and evidence_items:
+            recommendations.insert(0, Recommendation(
+                recommendation="Nothing is outstanding. Review the evidence on file and make your decision.",
+                rationale="No requested item is still missing from the case.",
+                supporting_record_ids=[dsp_id],
+                limitations="Check the evidence against the claim before deciding. Software can't weigh credibility.",
                 human_review_required=True
             ))
 
@@ -288,7 +304,7 @@ class AIService:
             f"Case {dsp_id} involves a claim of {currency} {amount:.2f} ({reason}). "
             f"Buyer states: \"{buyer_claim[:90]}...\". "
             f"Available records include {len(findings)} verified facts. "
-            f"Identified {len(evidence_gaps)} evidentiary gaps requiring investigator follow-up."
+            f"Identified {len(evidence_gaps)} evidence gaps to follow up."
         )
 
         return InvestigationBriefSchema(

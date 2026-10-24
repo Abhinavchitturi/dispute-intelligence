@@ -87,6 +87,7 @@ class DisputeListItem(BaseModel):
     priority_factors: List[PriorityFactor] = []
     evidence_status: str
     buyer_claim: Optional[str] = None
+    outcome: Optional[str] = None  # BUYER_FAVOR or SELLER_FAVOR once PayPal has decided
 
     class Config:
         from_attributes = True
