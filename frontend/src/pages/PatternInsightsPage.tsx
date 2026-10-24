@@ -1,132 +1,67 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import {
-  TrendingUp,
-  AlertTriangle,
-  FileQuestion,
-  Building,
-  ShieldAlert,
-  ArrowRight,
-  Info,
-  CheckCircle2
-} from 'lucide-react';
+import { AlertTriangle, ArrowRight, Info, Sparkles } from 'lucide-react';
 import { fetchPatternInsights } from '../api/client';
+import { Badge, Card, EmptyState, ErrorState, PageHeader, Skeleton } from '../components/ui/kit';
+import { cn, titleCase } from '../lib/format';
 
 export function PatternInsightsPage() {
   const navigate = useNavigate();
-  const { data: patterns, isLoading, error } = useQuery({
-    queryKey: ['patternInsights'],
-    queryFn: fetchPatternInsights,
-  });
+  const { data: patterns, isLoading, error, refetch } = useQuery({ queryKey: ['patternInsights'], queryFn: fetchPatternInsights });
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-xl font-bold text-white tracking-tight">Authorized Dataset Pattern Insights</h1>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
-              AUTHORIZED SCOPE ONLY
-            </span>
-          </div>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Systemic anomaly detection and evidentiary vulnerability clustering derived strictly from authorized records.
-          </p>
-        </div>
+    <>
+      <PageHeader
+        title="Patterns"
+        subtitle="Authorized Dataset Pattern Insights — recurring problems across your open disputes."
+      />
+      <div className="flex items-start gap-3 rounded-2xl border border-line bg-surface p-4 text-sm text-muted">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-brand-soft" />
+        <p>These patterns come only from your own sample dataset. They are not PayPal-wide statistics or fraud scores.</p>
       </div>
 
-      {/* Scope Disclaimer Box */}
-      <div className="p-4 rounded-xl bg-[#111A33] border border-[#233054] text-xs text-slate-300 flex items-start space-x-3">
-        <Info className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
-        <div className="space-y-1">
-          <p className="font-semibold text-slate-200">Data Boundary Notice</p>
-          <p className="text-slate-400 text-[11px] leading-relaxed">
-            These patterns reflect aggregations strictly within the authorized sandbox and synthetic merchant dataset.
-            ResolveIQ does not assert global PayPal platform-wide statistics or cross-merchant fraud scoring.
-          </p>
-        </div>
-      </div>
-
-      {/* Pattern Cards List */}
-      {isLoading ? (
-        <div className="py-16 text-center text-slate-400 text-xs">
-          <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-          Analyzing dispute clusters and evidentiary patterns...
-        </div>
-      ) : error ? (
-        <div className="p-4 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-xs">
-          Failed to load pattern insights.
-        </div>
+      {error ? <ErrorState message="Couldn't load patterns." onRetry={() => refetch()} /> : isLoading ? (
+        <div className="space-y-4"><Skeleton className="h-44 rounded-2xl" /><Skeleton className="h-44 rounded-2xl" /></div>
+      ) : !patterns?.length ? (
+        <Card><EmptyState icon={<Sparkles className="h-6 w-6" />} title="No patterns detected" hint="Patterns appear when several disputes share the same problem." /></Card>
       ) : (
         <div className="space-y-4">
-          {patterns?.map((p) => (
-            <div
-              key={p.pattern_id}
-              className="p-5 rounded-xl bg-[#0F172A] border border-[#1E293B] shadow-md space-y-3"
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center space-x-2">
-                  <div className={`p-1.5 rounded ${
-                    p.severity === 'HIGH'
-                      ? 'bg-rose-950/60 text-rose-400 border border-rose-800/60'
-                      : 'bg-amber-950/60 text-amber-400 border border-amber-800/60'
-                  }`}>
-                    <AlertTriangle className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h2 className="text-sm font-bold text-white">{p.title}</h2>
-                    <span className="text-[10px] font-mono text-slate-400">
-                      Category: {p.category} • Time Window: {p.time_window}
+          {patterns.map((p) => {
+            const high = p.severity === 'HIGH';
+            return (
+              <Card key={p.pattern_id} className={cn('relative overflow-hidden p-6 transition hover:border-line-strong')}>
+                <span className={cn('absolute inset-y-0 left-0 w-1', high ? 'bg-rose-400' : 'bg-amber-400')} />
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <span className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl', high ? 'bg-rose-400/10 text-rose-300' : 'bg-amber-400/10 text-amber-300')}>
+                      <AlertTriangle className="h-5 w-5" />
                     </span>
+                    <div>
+                      <h2 className="text-[15px] font-semibold text-white">{p.title}</h2>
+                      <p className="mt-0.5 text-[13px] text-muted">{titleCase(p.category)} · {p.time_window}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge tone="brand">{p.case_count} Disputed Cases</Badge>
+                    <Badge tone={high ? 'danger' : 'warn'}>{p.severity} SEVERITY</Badge>
                   </div>
                 </div>
-
-                <div className="flex items-center space-x-2 self-start sm:self-auto">
-                  <span className="text-xs px-2.5 py-1 rounded font-bold font-mono bg-blue-950 text-blue-300 border border-blue-800">
-                    {p.case_count} Disputed Cases
-                  </span>
-                  <span className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
-                    p.severity === 'HIGH'
-                      ? 'bg-rose-950 text-rose-300 border border-rose-800'
-                      : 'bg-amber-950 text-amber-300 border border-amber-800'
-                  }`}>
-                    {p.severity} SEVERITY
-                  </span>
+                <p className="mt-4 text-sm text-slate-300"><span className="font-medium text-white">Why it matters: </span>{p.why_noteworthy}</p>
+                <p className="mt-2 text-sm text-slate-300"><span className="font-medium text-brand-soft">Suggested fix: </span>{p.recommended_action}</p>
+                <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-4">
+                  <span className="text-xs text-muted">Affected</span>
+                  {p.supporting_record_ids.map((id: string) => (
+                    <button key={id} onClick={() => navigate(`/investigate/${id}`)} className="group inline-flex items-center gap-1 rounded-md bg-brand/10 px-2 py-1 font-mono text-xs text-brand-soft ring-1 ring-brand/20 transition hover:bg-brand/20">
+                      {id}<ArrowRight className="h-3 w-3 transition group-hover:translate-x-0.5" />
+                    </button>
+                  ))}
                 </div>
-              </div>
-
-              {/* Why Noteworthy */}
-              <div className="p-3 rounded-lg bg-[#161F38] border border-[#233054] text-xs">
-                <span className="font-semibold text-slate-200">Why Noteworthy: </span>
-                <span className="text-slate-300">{p.why_noteworthy}</span>
-              </div>
-
-              {/* Recommended Action */}
-              <div className="text-xs text-slate-300 flex items-start space-x-2">
-                <span className="font-semibold text-blue-400 flex-shrink-0">Action Recommended:</span>
-                <span className="text-slate-200">{p.recommended_action}</span>
-              </div>
-
-              {/* Supporting Dispute IDs */}
-              <div className="pt-2 border-t border-[#1E293B] flex flex-wrap items-center gap-2">
-                <span className="text-[11px] text-slate-400">Supporting Records:</span>
-                {p.supporting_record_ids.map((id: string) => (
-                  <button
-                    key={id}
-                    onClick={() => navigate(`/investigate/${id}`)}
-                    className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono bg-[#0B132B] hover:bg-blue-900/40 text-blue-300 border border-blue-800/70 transition"
-                  >
-                    <span>{id}</span>
-                    <ArrowRight className="w-2.5 h-2.5" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       )}
-    </div>
+    </>
   );
 }

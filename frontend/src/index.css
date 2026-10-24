@@ -3,29 +3,34 @@
 @tailwind utilities;
 
 @layer base {
+  html { color-scheme: dark; }
   body {
-    background-color: #070D1E;
-    color: #E2E8F0;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: #0A0E17;
+    color: #E6E9F2;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
   }
-  
-  code, pre {
-    font-family: 'JetBrains Mono', monospace;
-  }
+  code, pre { font-family: 'JetBrains Mono', monospace; }
+  :focus-visible { outline: 2px solid #6D7CFF; outline-offset: 2px; border-radius: 6px; }
+  ::selection { background: #6D7CFF55; }
 }
 
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+@layer utilities {
+  .skeleton { position: relative; overflow: hidden; background: #161C2D; border-radius: 8px; }
+  .skeleton::after {
+    content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.05), transparent);
+    animation: shimmer 1.4s infinite;
+  }
+  .tabular { font-variant-numeric: tabular-nums; }
 }
-::-webkit-scrollbar-track {
-  background: #0B132B;
-}
-::-webkit-scrollbar-thumb {
-  background: #233054;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #3A86FF;
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #232C46; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #2B3556; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

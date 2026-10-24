@@ -25,6 +25,7 @@ class Dispute(Base):
     priority_factors_json = Column(Text, nullable=True)
     buyer_claim = Column(Text, nullable=True)
     evidence_status = Column(String(64), default="PENDING")  # COMPLETE, PARTIAL, MISSING, CONFLICTING
+    outcome = Column(String(32), nullable=True)  # set when PayPal decides: BUYER_FAVOR or SELLER_FAVOR
 
     # Relationships
     transaction = relationship("Transaction", back_populates="dispute", uselist=False)
@@ -32,6 +33,7 @@ class Dispute(Base):
     evidence_items = relationship("Evidence", back_populates="dispute", cascade="all, delete-orphan")
     briefs = relationship("InvestigationBrief", back_populates="dispute", cascade="all, delete-orphan")
     audit_events = relationship("AuditEvent", back_populates="dispute", cascade="all, delete-orphan")
+    messages = relationship("DisputeMessage", back_populates="dispute", cascade="all, delete-orphan", order_by="DisputeMessage.created_at")
 
 class Transaction(Base):
     __tablename__ = "transactions"

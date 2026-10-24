@@ -24,6 +24,7 @@ export interface DisputeSummary {
   priority_factors: PriorityFactor[];
   evidence_status: string;
   buyer_claim: string | null;
+  outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null;
 }
 
 export interface TransactionInfo {
@@ -168,6 +169,8 @@ export interface DashboardSummary {
   approaching_deadline_count: number;
   missing_evidence_count: number;
   awaiting_review_count: number;
+  new_cases_count: number;
+  waiting_on_parties_count: number;
   disputes_by_reason: { reason: string; count: number }[];
   priority_distribution: { high: number; medium: number; low: number };
   recent_activity: any[];
@@ -214,5 +217,83 @@ export interface ActionExecuteResult {
   message: string;
   audit_event_id: string;
   environment: string;
+  message_id?: string | null;
   details?: any;
+}
+
+export interface ActionDraft {
+  dispute_id: string;
+  action_type: string;
+  recipient: string;
+  subject: string;
+  body: string;
+  cited_record_ids: string[];
+  warnings: string[];
+  notes?: string[];
+  source: 'rules' | 'llm';
+  model: string | null;
+  evidence_balance?: EvidenceBalance | null;
+}
+
+/** Facts from the case sorted by which side they support. A summary of the records, not a verdict. */
+export interface EvidenceBalance {
+  toward_buyer: string[];
+  toward_seller: string[];
+  other: string[];
+}
+
+export interface DisputeMessage {
+  id: string;
+  dispute_id: string;
+  direction: 'OUTBOUND' | 'INBOUND';
+  counterparty: 'SELLER' | 'BUYER';
+  action_type: string | null;
+  subject: string;
+  body: string;
+  source: 'synthetic' | 'paypal_sandbox';
+  awaiting_reply: boolean;
+  reply_due_at: string | null;
+  in_reply_to: string | null;
+  is_read: boolean;
+  requested_evidence: string[];
+  provided_evidence: string[];
+  unavailable_evidence: string[];
+  deadline: string | null;
+  created_at: string;
+}
+
+export interface MessageThreadSummary {
+  dispute_id: string;
+  buyer_reference: string | null;
+  merchant_reference: string | null;
+  reason: string;
+  amount: number;
+  currency: string;
+  dispute_status: string;
+  state: 'WAITING' | 'YOUR_TURN' | 'CLOSED';
+  waiting_on: 'Seller' | 'Buyer' | 'Seller and buyer' | null;
+  last_message_preview: string;
+  last_message_at: string;
+  last_direction: 'OUTBOUND' | 'INBOUND';
+  unread_count: number;
+  message_count: number;
+  awaiting_since: string | null;
+  expected_reply_at: string | null;
+  simulated: boolean;
+  pending_message_ids: string[];
+  outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null;
+}
+
+export interface EvidenceRequestOption {
+  evidence_type: string;
+  label: string;
+  why: string;
+  on_file: boolean;
+  on_file_description: string | null;
+  suggested: boolean;
+}
+
+export interface EvidenceRequestOptions {
+  seller: EvidenceRequestOption[];
+  buyer: EvidenceRequestOption[];
 }

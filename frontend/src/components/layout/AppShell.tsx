@@ -1,182 +1,142 @@
-import React, { useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import {
-  LayoutDashboard,
-  ListFilter,
-  ShieldAlert,
-  GitCompare,
-  TrendingUp,
-  ScrollText,
-  Settings,
-  Search,
-  RotateCcw,
-  ExternalLink,
-  ChevronRight,
-  Database,
-  CheckCircle2,
-  Sparkles,
-  UserCheck
-} from 'lucide-react';
-import { resetDemoData } from '../../api/client';
+import React, { useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { PanelLeftClose, PanelLeftOpen, Search, ShieldCheck } from 'lucide-react';
+import { fetchHealth, fetchMessageThreads } from '../../api/client';
+import { cn } from '../../lib/format';
+import { useStoredState } from '../../lib/hooks';
+import { CommandPalette } from './CommandPalette';
+import { PAGES } from './pages';
+import { CURRENT_USER, initials } from '../../lib/user';
+import { Badge } from '../ui/kit';
+
+const GROUPS: { id: string; label: string }[] = [
+  { id: 'main', label: 'Workspace' },
+  { id: 'insights', label: 'Insights' },
+  { id: 'system', label: 'System' },
+];
 
 export function AppShell() {
-  const [searchVal, setSearchVal] = useState('');
-  const [isResetting, setIsResetting] = useState(false);
-  const [resetSuccess, setResetSuccess] = useState(false);
-  const navigate = useNavigate();
+  const [collapsed, setCollapsed] = useStoredState('resolveiq.sidebar.collapsed', false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const location = useLocation();
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchVal.trim()) {
-      navigate(`/queue?search=${encodeURIComponent(searchVal.trim())}`);
-    }
-  };
+  const { data: health, isError } = useQuery({
+    queryKey: ['health'],
+    queryFn: fetchHealth,
+    refetchInterval: 15_000,
+    retry: 0,
+  });
+  const online = !!health && !isError;
 
-  const handleResetData = async () => {
-    try {
-      setIsResetting(true);
-      await resetDemoData();
-      setResetSuccess(true);
-      setTimeout(() => setResetSuccess(false), 3000);
-      window.location.reload();
-    } catch (err) {
-      alert('Failed to reset demo data.');
-    } finally {
-      setIsResetting(false);
-    }
-  };
+  // Badge on Messages: conversations with a new reply, or where it's now your turn.
+  const { data: threads } = useQuery({ queryKey: ['messageThreads'], queryFn: fetchMessageThreads, refetchInterval: 10_000, retry: 0 });
+  const needsYou = threads?.filter((t) => t.unread_count > 0 || t.state === 'YOUR_TURN').length ?? 0;
+  const waiting = threads?.filter((t) => t.state === 'WAITING').length ?? 0;
 
-  const navItems = [
-    { name: 'Overview', to: '/', icon: LayoutDashboard },
-    { name: 'Dispute Queue', to: '/queue', icon: ListFilter },
-    { name: 'Case Investigation', to: '/investigate/DEMO-DSP-1042', icon: ShieldAlert },
-    { name: 'Similar Cases', to: '/similar', icon: GitCompare },
-    { name: 'Pattern Insights', to: '/patterns', icon: TrendingUp },
-    { name: 'Audit Trail', to: '/audit', icon: ScrollText },
-    { name: 'Settings & Integrations', to: '/settings', icon: Settings },
-  ];
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen((o) => !o); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const isCase = location.pathname.startsWith('/investigate');
 
   return (
-    <div className="flex h-screen bg-[#070D1E] text-slate-100 overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 bg-[#0B132B] border-r border-[#1E293B] flex flex-col flex-shrink-0 select-none">
-        {/* Brand Header */}
-        <div className="p-5 border-b border-[#1E293B] flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/20 text-white font-bold">
-            <ShieldAlert className="w-5 h-5 text-white" />
+    <div className="flex h-screen overflow-hidden bg-canvas text-slate-100">
+      <aside className={cn('flex shrink-0 flex-col border-r border-line bg-surface transition-[width] duration-200', collapsed ? 'w-[68px]' : 'w-60')}>
+        <div className={cn('flex h-16 items-center gap-3 border-b border-line', collapsed ? 'justify-center' : 'px-5')}>
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand to-violet-500 shadow-lg shadow-brand/30">
+            <ShieldCheck className="h-5 w-5 text-white" />
           </div>
-          <div>
-            <div className="flex items-center space-x-1.5">
-              <span className="font-bold tracking-tight text-white text-lg">ResolveIQ</span>
-              <span className="text-[10px] font-mono uppercase bg-blue-950 text-blue-400 border border-blue-800 px-1.5 py-0.2 rounded font-semibold">
-                v1.0
-              </span>
+          {!collapsed && (
+            <div className="leading-tight">
+              <div className="text-[15px] font-semibold text-white">ResolveIQ</div>
+              <div className="text-xs text-muted">PayPal Disputes</div>
             </div>
-            <p className="text-[11px] text-slate-400 leading-tight">PayPal Dispute Intelligence</p>
-          </div>
+          )}
         </div>
 
-        {/* Navigation Links */}
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          <div className="px-3 py-2 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-            Investigation Workspace
-          </div>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === '/'}
-                className={({ isActive }) =>
-                  `flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    isActive
-                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/30'
-                      : 'text-slate-300 hover:bg-[#161F38] hover:text-white'
-                  }`
-                }
-              >
-                <Icon className="w-4 h-4 flex-shrink-0" />
-                <span className="truncate">{item.name}</span>
-              </NavLink>
-            );
-          })}
+        <nav className="flex-1 space-y-5 overflow-y-auto p-3" aria-label="Primary">
+          {GROUPS.map((g) => (
+            <div key={g.id} className="space-y-1">
+              {!collapsed && <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">{g.label}</div>}
+              {PAGES.filter((p) => p.group === g.id).map((p) => (
+                <NavLink
+                  key={p.to}
+                  to={p.to}
+                  end={p.to === '/'}
+                  title={collapsed ? p.name : undefined}
+                  className={({ isActive }) => {
+                    const active = isActive || (p.to === '/investigate' && isCase);
+                    return cn(
+                      'group relative flex items-center gap-3 rounded-xl py-2.5 text-sm font-medium transition',
+                      collapsed ? 'justify-center px-0' : 'px-3',
+                      active ? 'bg-brand/15 text-white ring-1 ring-brand/25' : 'text-muted hover:bg-white/5 hover:text-white',
+                    );
+                  }}
+                >
+                  <p.icon className="h-[18px] w-[18px] shrink-0" />
+                  {!collapsed && <span className="flex-1">{p.name}</span>}
+                  {p.to === '/messages' && (needsYou > 0 || waiting > 0) && (
+                    <span
+                      aria-label={needsYou > 0 ? `${needsYou} conversations need you` : `${waiting} waiting for a reply`}
+                      className={cn('rounded-full px-1.5 text-[11px] font-semibold tabular', needsYou > 0 ? 'bg-brand text-white' : 'bg-white/10 text-muted', collapsed && 'absolute right-1.5 top-1')}
+                    >
+                      {needsYou > 0 ? needsYou : waiting}
+                    </span>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          ))}
         </nav>
 
-        {/* Demo Mode Notice Box */}
-        <div className="p-4 m-3 rounded-lg bg-[#111A33] border border-[#233054] text-xs">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="font-semibold text-slate-200 flex items-center space-x-1">
-              <Database className="w-3.5 h-3.5 text-blue-400" />
-              <span>Environment</span>
-            </span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium bg-purple-900/40 text-purple-300 border border-purple-700/50">
-              DEMO DATA
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 leading-relaxed mb-2.5">
-            Operating on 12 seeded disputes & 20 historical precedents. PayPal Sandbox actions simulate safely.
-          </p>
+        <div className="border-t border-line p-3">
           <button
-            onClick={handleResetData}
-            disabled={isResetting}
-            className="w-full flex items-center justify-center space-x-1.5 px-2.5 py-1.5 bg-[#1C2541] hover:bg-[#233054] text-slate-200 rounded text-[11px] font-medium border border-slate-700/60 transition"
+            onClick={() => setCollapsed(!collapsed)}
+            className={cn('flex w-full items-center gap-3 rounded-xl py-2 text-sm text-muted transition hover:bg-white/5 hover:text-white', collapsed ? 'justify-center' : 'px-3')}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
-            <RotateCcw className={`w-3 h-3 ${isResetting ? 'animate-spin' : ''}`} />
-            <span>{isResetting ? 'Resetting...' : resetSuccess ? 'Seeded Fresh!' : 'Reset Demo Data'}</span>
+            {collapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" /> : <><PanelLeftClose className="h-[18px] w-[18px]" /><span>Collapse</span></>}
           </button>
-        </div>
-
-        {/* User Card */}
-        <div className="p-3 border-t border-[#1E293B] flex items-center space-x-3 bg-[#0B132B]">
-          <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-semibold text-white">
-            SJ
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-slate-200 truncate">Sarah Jenkins</p>
-            <p className="text-[10px] text-slate-400 truncate">Senior Dispute Investigator</p>
-          </div>
-          <UserCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
         </div>
       </aside>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top Header */}
-        <header className="h-14 bg-[#0B132B]/80 backdrop-blur border-b border-[#1E293B] flex items-center justify-between px-6 z-10">
-          {/* Search bar */}
-          <form onSubmit={handleSearchSubmit} className="relative w-96">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search disputes, transactions, buyers (e.g. 1042)..."
-              value={searchVal}
-              onChange={(e) => setSearchVal(e.target.value)}
-              className="w-full pl-9 pr-4 py-1.5 bg-[#161F38] border border-[#233054] rounded-lg text-xs text-slate-200 placeholder-slate-400 focus:outline-none focus:border-blue-500 transition"
-            />
-          </form>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-16 shrink-0 items-center gap-4 border-b border-line bg-canvas/80 px-6 backdrop-blur">
+          <button
+            onClick={() => setPaletteOpen(true)}
+            className="group flex h-10 w-full max-w-md items-center gap-3 rounded-xl border border-line-strong bg-surface px-3 text-sm text-muted transition hover:border-brand/50"
+          >
+            <Search className="h-4 w-4" />
+            <span className="flex-1 text-left">Search disputes, buyers, pages…</span>
+            <kbd className="rounded-md border border-line-strong px-1.5 py-0.5 text-[11px]">⌘K</kbd>
+          </button>
 
-          {/* Right Header Status Badges */}
-          <div className="flex items-center space-x-3 text-xs">
-            {/* Tagline / Environment Pill */}
-            <div className="hidden lg:flex items-center space-x-2 px-3 py-1 bg-[#161F38] border border-[#233054] rounded-full text-slate-300">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span className="text-[11px] font-medium">Demo Mode • Verified Evidence Rules Active</span>
-            </div>
-
-            <div className="h-4 w-px bg-slate-700 hidden lg:block" />
-
-            <div className="text-[11px] text-slate-400 hidden sm:block">
-              Tagline: <span className="text-slate-200 italic font-normal">"Every claim. Every source. One clearer investigation."</span>
+          <div className="ml-auto flex items-center gap-3">
+            <Badge tone="violet">Demo data</Badge>
+            <Badge tone={online ? 'success' : 'danger'} dot>{online ? 'Live' : 'Offline'}</Badge>
+            <div className="hidden items-center gap-3 border-l border-line pl-4 sm:flex">
+              <div className="grid h-8 w-8 place-items-center rounded-full bg-brand/20 text-xs font-semibold text-brand-soft">{initials(CURRENT_USER.name)}</div>
+              <div className="leading-tight">
+                <div className="text-[13px] font-medium text-white">{CURRENT_USER.name}</div>
+                <div className="text-xs text-muted">{CURRENT_USER.role}</div>
+              </div>
             </div>
           </div>
         </header>
 
-        {/* Scrollable Viewport */}
-        <main className="flex-1 overflow-y-auto p-6 bg-[#070D1E]">
-          <Outlet />
+        <main className="flex-1 overflow-y-auto">
+          <div key={location.pathname} className="mx-auto max-w-[1280px] animate-fade-in space-y-6 p-6 lg:p-8">
+            <Outlet />
+          </div>
         </main>
       </div>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }
