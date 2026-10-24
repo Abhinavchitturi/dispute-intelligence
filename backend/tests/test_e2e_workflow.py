@@ -1,0 +1,124 @@
+import pytest
+from fastapi.testclient import TestClient
+from backend.app.main import app
+from backend.app.database import SessionLocal
+from backend.app.seed.seed_data import seed_database
+from backend.app.models.dispute import Dispute
+
+client = TestClient(app)
+
+def test_full_e2e_investigation_scenario():
+    # 0. Ensure fresh database state
+    seed_database()
+
+    # 1. Step 1: Open dashboard summary
+    dash_resp = client.get("/api/dashboard/summary")
+    assert dash_resp.status_code == 200
+    dash_data = dash_resp.json()
+    assert dash_data["total_open_disputes"] >= 8
+    assert dash_data["missing_evidence_count"] >= 3
+    assert dash_data["environment_mode"] == "demo"
+
+    # 2. Step 2: Query queue and search for main demo case DEMO-DSP-1042
+    queue_resp = client.get("/api/disputes?search=1042")
+    assert queue_resp.status_code == 200
+    queue_data = queue_resp.json()
+    assert len(queue_data) == 1
+    case_summary = queue_data[0]
+    assert case_summary["id"] == "DEMO-DSP-1042"
+    assert case_summary["amount"] == 450.00
+    assert case_summary["priority_score"] >= 40.0
+    assert len(case_summary["priority_factors"]) > 0
+
+    # 3. Step 3: Open dispute detail and inspect context
+    detail_resp = client.get("/api/disputes/DEMO-DSP-1042")
+    assert detail_resp.status_code == 200
+    detail = detail_resp.json()
+    assert detail["buyer_reference"] == "Alex Morgan (alex_m_demo)"
+    assert detail["merchant_reference"] == "TechStore"
+    assert detail["order"]["shipment"]["status"] == "DELIVERED"
+    assert detail["order"]["shipment"]["delivery_address_match"] == "unknown"
+    assert len(detail["evidence_items"]) >= 4
+
+    # 4. Step 4: Generate AI investigation brief
+    brief_resp = client.post("/api/disputes/DEMO-DSP-1042/brief?force_regenerate=true")
+    assert brief_resp.status_code == 200
+    brief = brief_resp.json()
+    assert brief["dispute_id"] == "DEMO-DSP-1042"
+    assert len(brief["structured_findings"]) >= 3
+
+    # Check prompt requirement: reports delivery while address verification is unavailable
+    findings_claims = " ".join([f["claim"] for f in brief["structured_findings"]])
+    assert "DELIVERED" in findings_claims or "delivered" in findings_claims
+    assert "address verification is unavailable" in findings_claims or "postal" in findings_claims
+
+    # Check prompt requirement: every factual finding cites source records
+    for f in brief["structured_findings"]:
+        if f["classification"] == "fact" and f["verification_status"] == "verified":
+            assert len(f["source_record_ids"]) > 0
+
+    # Check evidence gaps
+    assert len(brief["evidence_gaps"]) >= 1
+    gap_types = [g["evidence_type"] for g in brief["evidence_gaps"]]
+    assert "PROOF_OF_DELIVERY_SIGNATURE" in gap_types or "ADDRESS_VERIFICATION" in gap_types or "MERCHANT_CORRESPONDENCE" in gap_types
+
+    # Check recommendations require human review
+    assert len(brief["recommendations"]) >= 1
+    for r in brief["recommendations"]:
+        assert r["human_review_required"] is True
+
+    # 5. Step 5: Retrieve similar historical cases
+    similar_resp = client.get("/api/disputes/DEMO-DSP-1042/similar-cases")
+    assert similar_resp.status_code == 200
+    similar = similar_resp.json()
+    assert len(similar) >= 1
+    top_match = similar[0]
+    assert top_match["similarity_score"] is not None
+    assert top_match["similarity_score"] > 60.0
+    assert len(top_match["matching_factors"]) > 0
+
+    # 6. Step 6: Investigator previews action
+    preview_resp = client.post(
+        "/api/disputes/DEMO-DSP-1042/actions/preview",
+        json={
+            "action_type": "PROVIDE_EVIDENCE",
+            "notes": "Verified carrier postal depot scan matches postal sector.",
+            "carrier": "UPS",
+            "tracking_number": "1Z9999999999999999"
+        }
+    )
+    assert preview_resp.status_code == 200
+    prev_data = preview_resp.json()
+    assert prev_data["is_supported"] is True
+    assert prev_data["requires_confirmation"] is True
+
+    # 7. Step 7: Investigator executes confirmed action
+    exec_resp = client.post(
+        "/api/disputes/DEMO-DSP-1042/actions/execute",
+        json={
+            "action_type": "PROVIDE_EVIDENCE",
+            "confirmed": True,
+            "notes": "Verified carrier postal depot scan matches postal sector.",
+            "carrier": "UPS",
+            "tracking_number": "1Z9999999999999999"
+        }
+    )
+    assert exec_resp.status_code == 200
+    exec_data = exec_resp.json()
+    assert exec_data["success"] is True
+    assert exec_data["environment"] == "demo"
+    audit_id = exec_data["audit_event_id"]
+
+    # 8. Step 8: Verify dispute status updated
+    updated_dsp = client.get("/api/disputes/DEMO-DSP-1042").json()
+    assert updated_dsp["status"] == "UNDER_REVIEW"
+    assert updated_dsp["evidence_status"] == "COMPLETE"
+
+    # 9. Step 9: Verify audit trail
+    audit_resp = client.get("/api/audit-events?dispute_id=DEMO-DSP-1042")
+    assert audit_resp.status_code == 200
+    events = audit_resp.json()
+    matching_event = next((e for e in events if e["id"] == audit_id), None)
+    assert matching_event is not None
+    assert matching_event["action"] == "PROVIDE_EVIDENCE"
+    assert matching_event["status"] == "SUCCESS"
