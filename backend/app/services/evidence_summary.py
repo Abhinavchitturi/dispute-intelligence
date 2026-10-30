@@ -89,4 +89,13 @@ def build(dispute: Dispute) -> Dict[str, List[Dict[str, Any]]]:
             party = cat.party_of(ev.evidence_type) or cat.SELLER
             (buyer if party == cat.BUYER else seller).append(_item(ev.evidence_type, party, None, _why_missing(dispute, party, ev.evidence_type)))
             listed.add(ev.evidence_type)
+    # Anything that was asked for must show up, even if it isn't on this kind of case's usual checklist.
+    for m in dispute.messages:
+        if m.direction != "OUTBOUND" or m.counterparty not in (cat.SELLER, cat.BUYER):
+            continue
+        for t in m.requested_evidence:
+            if t not in listed:
+                row = _item(t, m.counterparty, _available(dispute, t), "" if _available(dispute, t) else _why_missing(dispute, m.counterparty, t))
+                (seller if m.counterparty == cat.SELLER else buyer).append(row)
+                listed.add(t)
     return {"seller": seller, "buyer": buyer, "records": records}

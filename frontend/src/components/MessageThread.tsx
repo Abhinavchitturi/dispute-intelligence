@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Gavel, Handshake, Inbox, LogOut, Play, Store, User } from 'lucide-react';
-import { declareFromParty, fetchDisputeDetail, fetchDisputeMessages, markMessagesRead, simulateReply } from '../api/client';
+import { Gavel, Handshake, Inbox, LogOut, Mail, Paperclip, Play, Store, User } from 'lucide-react';
+import { declareFromParty, fetchDisputeDetail, fetchDisputeMessages, markMessagesRead, recordReply, simulateEmailReply, simulateReply } from '../api/client';
 import { DisputeMessage } from '../types';
-import { Badge, Button, EmptyState, ErrorState, Skeleton, useToast } from './ui/kit';
+import { Badge, Button, EmptyState, ErrorState, Input, Skeleton, useToast } from './ui/kit';
 import { EvidenceChecklist } from './EvidenceChecklist';
 import { cn, evidenceLabel, outcomeMeta, outcomeText, parseServerDate, timeAgo } from '../lib/format';
 import { useNow } from '../lib/hooks';
@@ -14,6 +14,45 @@ const REFRESH_KEYS = ['messageThreads', 'disputeDetail', 'disputeTimeline', 'das
 const isDecision = (m: DisputeMessage) => m.action_type === 'DECIDE_FOR_BUYER' || m.action_type === 'DECIDE_FOR_SELLER';
 /** Sent to both sides with the same words: a decision, or PayPal closing a settled or dismissed case. */
 const isBroadcast = (m: DisputeMessage) => isDecision(m) || m.action_type === 'DISPUTE_SETTLED' || m.action_type === 'DISPUTE_DISMISSED';
+
+/**
+ * An emailed reply, waiting to be gone through. The seller and buyer aren't on this app, so a person at PayPal ticks
+ * which of the documents that were asked for actually came with the email. Whatever isn't ticked is recorded as not sent.
+ */
+function RecordReplyPanel({ disputeId, reply, asked, onDone }: { disputeId: string; reply: DisputeMessage; asked: string[]; onDone: () => void }) {
+  const toast = useToast();
+  const [got, setGot] = useState<Record<string, boolean>>({});
+  const [file, setFile] = useState<Record<string, string>>({});
+  const save = useMutation({
+    mutationFn: () => recordReply(disputeId, reply.id, asked.filter((t) => got[t]).map((t) => ({ evidence_type: t, file_name: file[t]?.trim() || undefined }))),
+    onSuccess: (r) => { toast('success', r.provided_evidence.length ? `Recorded ${r.provided_evidence.length} of ${asked.length} items.` : 'Recorded. Nothing came with it.'); onDone(); },
+    onError: (e: Error) => toast('error', e.message),
+  });
+  const n = asked.filter((t) => got[t]).length;
+  return (
+    <section aria-label="Record what they sent" className="mt-3 rounded-xl border border-brand/30 bg-brand/[.07] p-3">
+      <h5 className="text-[13px] font-semibold text-white">What did they send?</h5>
+      <p className="mt-0.5 text-xs text-muted">Open the attachments, then tick what actually arrived. Anything unticked is recorded as not sent.</p>
+      <ul className="mt-2 space-y-2">
+        {asked.map((t) => (
+          <li key={t} className="rounded-lg bg-black/20 px-2.5 py-2">
+            <label className="flex cursor-pointer items-center gap-2.5 text-[13px] text-slate-200">
+              <input type="checkbox" checked={!!got[t]} onChange={(e) => setGot({ ...got, [t]: e.target.checked })} aria-label={evidenceLabel(t)} className="h-4 w-4 accent-[#0A84FF]" />
+              {evidenceLabel(t)}
+            </label>
+            {got[t] && (
+              <div className="mt-2 pl-6">
+                <Input list={`files-${reply.id}`} value={file[t] ?? ''} onChange={(e) => setFile({ ...file, [t]: e.target.value })} placeholder="File name (optional)" aria-label={`File for ${evidenceLabel(t)}`} className="py-1.5 text-[13px]" />
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      <datalist id={`files-${reply.id}`}>{(reply.attachments ?? []).map((a) => <option key={a} value={a} />)}</datalist>
+      <Button size="sm" variant="primary" className="mt-3" loading={save.isPending} onClick={() => save.mutate()}>{n ? `Record ${n} of ${asked.length}` : 'Record: nothing came'}</Button>
+    </section>
+  );
+}
 
 /** A message goes into one party's chat, so a decision (sent to both) appears in both. */
 function chatFor(messages: DisputeMessage[], party: Party) {
@@ -57,6 +96,11 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
     onSuccess: (reply) => { toast('info', `The ${PARTY_NAME[reply.counterparty].toLowerCase()} replied.`); refreshAll(); },
     onError: (e: Error) => toast('error', e.message),
   });
+  const emailReply = useMutation({
+    mutationFn: (party: Party) => simulateEmailReply(disputeId, party, 'Hello, the documents you asked for are attached.', ['documents.pdf']),
+    onSuccess: () => { toast('info', 'An email reply arrived. Go through what came with it.'); refreshAll(); },
+    onError: (e: Error) => toast('error', e.message),
+  });
   const declare = useMutation({
     mutationFn: (v: { party: Party; kind: 'SETTLED' | 'WITHDRAWN' }) => declareFromParty(disputeId, v.party, v.kind),
     onSuccess: (_m, v) => { toast('info', v.kind === 'WITHDRAWN' ? 'The buyer withdrew the claim.' : `The ${PARTY_NAME[v.party].toLowerCase()} says it is settled.`); refreshAll(); },
@@ -71,8 +115,9 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
 
   const pending = messages.filter((m) => m.direction === 'OUTBOUND' && m.awaiting_reply);
   const decided = disputeStatus === 'RESOLVED' || disputeStatus === 'CLOSED';
-  const inReview = disputeStatus === 'PENDING_ADMIN_REVIEW';
-  const ready = !pending.length && !decided && !inReview && messages[messages.length - 1].direction === 'INBOUND';
+  const inReview = disputeStatus === 'PENDING_AI_REVIEW';
+  // Ready to decide once BOTH sides have answered (or time is up). The server works that out and says so in the status.
+  const ready = !pending.length && !decided && !inReview && disputeStatus === 'UNDER_REVIEW';
   const result = outcomeMeta(outcome);
   const d = detail.data;
   const sellerSettled = !!d?.seller_settled_at;
@@ -99,7 +144,12 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
         </header>
 
         <ol className="flex-1 space-y-3 p-4" aria-label={`${PARTY_NAME[party]} conversation`}>
-          {mine.length === 0 && <li className="py-6 text-center text-[13px] text-muted">Nothing sent to the {who} yet.</li>}
+          {mine.length === 0 && (
+            <li className="py-6 text-center text-[13px] text-muted">
+              Nothing sent to the {who} yet.
+              <span className="mt-1 block text-xs">The {who} isn't on this app. Requests go to them by email, and their replies come back here.</span>
+            </li>
+          )}
           {mine.map((m) => {
             const out = m.direction === 'OUTBOUND';
             const broadcast = isBroadcast(m);
@@ -113,6 +163,7 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
                     <span className="font-medium text-slate-200">{out ? 'PayPal' : PARTY_NAME[party]}</span>
                     {isDecision(m) && <Badge tone="warn">Decision</Badge>}
                     {!out && m.source === 'synthetic' && <Badge tone="violet">Simulated</Badge>}
+                    {!out && m.source === 'email' && <Badge tone="info"><Mail className="h-3 w-3" />Email reply</Badge>}
                     {fresh.has(m.id) && <Badge tone="brand">New</Badge>}
                     <span title={parseServerDate(m.created_at).toLocaleString()}>· {timeAgo(m.created_at, now)}</span>
                   </header>
@@ -125,6 +176,18 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
                       {m.deadline && <span className="text-xs text-muted">· reply by {parseServerDate(m.deadline).toLocaleDateString()}</span>}
                     </div>
                   )}
+                  {out && m.emailed_to && (
+                    <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+                      <Mail aria-hidden className="h-3 w-3" />Emailed to <span className="text-slate-300">{m.emailed_to}</span>
+                      {m.email_status === 'QUEUED' && <Badge>Kept here, not sent</Badge>}
+                      {m.email_status === 'SENT' && <Badge tone="success">Sent</Badge>}
+                      {m.email_status === 'FAILED' && <Badge tone="danger">Email failed</Badge>}
+                    </p>
+                  )}
+                  {!out && (m.attachments?.length ?? 0) > 0 && (
+                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5"><Paperclip aria-hidden className="h-3 w-3 text-muted" />{m.attachments!.map((a) => <Badge key={a}>{a}</Badge>)}</div>
+                  )}
+                  {!out && m.needs_recording && <RecordReplyPanel disputeId={disputeId} reply={m} asked={messages.find((x) => x.id === m.in_reply_to)?.requested_evidence ?? []} onDone={refreshAll} />}
                   {!out && (m.provided_evidence.length > 0 || m.unavailable_evidence.length > 0) && (
                     <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                       {m.provided_evidence.map((t) => <Badge key={t} tone="success">✓ {evidenceLabel(t)}</Badge>)}
@@ -149,16 +212,22 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
                       <span>
                         Waiting for the <span className="font-medium text-white">{who}</span> to reply
                         {seconds !== null && <span className="text-muted"> · {seconds > 0 ? `expected in ${seconds}s` : 'any moment now'}</span>}
+                        {seconds === null && p.emailed_to && <span className="text-muted"> · by email</span>}
                       </span>
                     </div>
                     {p.source === 'synthetic' && (
-                      <Button size="sm" loading={simulate.isPending && simulate.variables === p.id} onClick={() => simulate.mutate(p.id)}>
-                        <Play className="h-3.5 w-3.5" />Simulate {who} reply
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" loading={simulate.isPending && simulate.variables === p.id} onClick={() => simulate.mutate(p.id)}>
+                          <Play className="h-3.5 w-3.5" />Simulate {who} reply
+                        </Button>
+                        <Button size="sm" variant="ghost" loading={emailReply.isPending && emailReply.variables === party} onClick={() => emailReply.mutate(party)} aria-label={`Simulate ${who} email reply`}>
+                          <Mail className="h-3.5 w-3.5" />Simulate email reply
+                        </Button>
+                      </div>
                     )}
                   </div>
                   {p.source !== 'synthetic' && (
-                    <p className="mt-2 text-xs text-muted">Replies from the {who} aren't synced into this app yet, so check the case in PayPal's system.</p>
+                    <p className="mt-2 text-xs text-muted">The {who} was emailed. Their reply arrives by email and shows up here for someone to go through.</p>
                   )}
                 </div>
               </li>
@@ -203,7 +272,7 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
         <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand/30 bg-brand/10 p-4 animate-fade-in">
           <div className="flex items-center gap-3 text-sm text-white">
             <Gavel className="h-5 w-5 text-brand-soft" />
-            <span><span className="font-medium">The evidence is in.</span> Review it, then decide.</span>
+            <span><span className="font-medium">The evidence is in.</span> Both sides have answered. Review it, then decide.</span>
           </div>
           {onTakeAction && <Button size="sm" variant="primary" onClick={onTakeAction}>Ready to decide</Button>}
         </div>
@@ -212,7 +281,7 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
       {inReview && (
         <div role="status" className="flex items-center gap-3 rounded-2xl border border-amber-400/25 bg-amber-400/[.07] p-4 text-sm text-amber-100 animate-fade-in">
           <Gavel className="h-5 w-5 shrink-0" />
-          <span><span className="font-medium">Waiting for an admin.</span> Your decision is with them. The seller and the buyer are told once it is confirmed.</span>
+          <span><span className="font-medium">With the AI reviewer.</span> The seller and the buyer are told once it has ruled.</span>
         </div>
       )}
 

@@ -97,12 +97,12 @@ def test_full_e2e_investigation_scenario():
     updated_dsp = client.get("/api/disputes/DEMO-DSP-1042").json()
     assert updated_dsp["status"] == "WAITING_FOR_SELLER_RESPONSE"
 
-    # 9. Step 9: The seller answers, the case is ready to decide, and the investigator decides
+    # 9. Step 9: The seller answers. The buyer hasn't been asked, so the case is in progress. The investigator can still decide with what is on file.
     msg = client.get("/api/disputes/DEMO-DSP-1042/messages").json()[0]
     assert client.post(f"/api/messages/{msg['id']}/simulate-reply").status_code == 200
-    assert client.get("/api/disputes/DEMO-DSP-1042").json()["status"] == "UNDER_REVIEW"
-    decision = client.post("/api/disputes/DEMO-DSP-1042/actions/execute", json={"action_type": "DECIDE_FOR_BUYER", "confirmed": True, "message": "Decided."})
-    assert decision.status_code == 200
+    assert client.get("/api/disputes/DEMO-DSP-1042").json()["status"] == "IN_PROGRESS"
+    from backend.tests.helpers import decide
+    decide(client, "DEMO-DSP-1042", "BUYER_FAVOR")
     final = client.get("/api/disputes/DEMO-DSP-1042").json()
     assert final["status"] == "RESOLVED" and final["outcome"] == "BUYER_FAVOR"
 

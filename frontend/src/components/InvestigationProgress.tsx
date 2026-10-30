@@ -17,7 +17,9 @@ export function computeProgress(d: DisputeDetail, messages: DisputeMessage[] | u
   const replies = msgs.filter((m) => m.direction === 'INBOUND');
   const requested = sent.length > 0;
   const decided = isClosed(d.status);
-  const allIn = requested && pending.length === 0 && replies.length > 0;
+  // Evidence is "all in" once BOTH the seller and the buyer have answered. One side answering isn't enough.
+  const answeredBy = new Set(sent.filter((m) => !m.awaiting_reply).map((m) => m.counterparty));
+  const allIn = requested && pending.length === 0 && replies.length > 0 && answeredBy.has('SELLER') && answeredBy.has('BUYER');
   // One concrete document on file is enough to act on, so a case is only "blocked" when it has none at all.
   const onFile = d.evidence_items.filter((e) => e.availability_status === 'AVAILABLE').length;
   const blocked = !requested && !decided && onFile === 0 && (d.evidence_status === 'MISSING' || d.evidence_status === 'CONFLICTING');
@@ -28,7 +30,7 @@ export function computeProgress(d: DisputeDetail, messages: DisputeMessage[] | u
   })();
   const result = outcomeMeta(d.outcome);
   const judged = d.outcome === 'BUYER_FAVOR' || d.outcome === 'SELLER_FAVOR'; // a decision, as opposed to settled or dismissed
-  const withAdmin = d.status === 'PENDING_ADMIN_REVIEW';
+  const withAdmin = d.status === 'PENDING_AI_REVIEW';
 
   // A decided case is finished. Some arrive already decided with nobody asked (decided from the records), and that's still complete.
   const flags = decided ? [true, true, true, true] : [true, requested, allIn, false];
@@ -37,7 +39,7 @@ export function computeProgress(d: DisputeDetail, messages: DisputeMessage[] | u
     { key: 'filed', label: 'Case filed', detail: 'Buyer opened the dispute' },
     { key: 'requested', label: 'Evidence requested', detail: requested ? `${sent.length} request${sent.length === 1 ? '' : 's'} sent` : decided ? 'Decided from the records' : 'Nobody asked yet' },
     { key: 'received', label: 'Evidence received', detail: pending.length && !decided ? `Waiting on ${waitingOn}` : allIn ? 'All replies in' : decided ? (requested ? 'Nothing left to wait for' : 'None needed') : 'Nothing to wait for yet' },
-    { key: 'decided', label: 'Decision made', detail: decided ? (result ? (judged ? `In the ${result.label.toLowerCase()}` : result.label) : 'Closed') : withAdmin ? 'With an admin to confirm' : 'Your call' },
+    { key: 'decided', label: 'Decision made', detail: decided ? (result ? (judged ? `In the ${result.label.toLowerCase()}` : result.label) : 'Closed') : withAdmin ? 'With the AI reviewer' : 'Your call' },
   ].map((s, i) => ({ ...s, state: (flags[i] ? 'done' : i === firstOpen ? 'current' : 'todo') as StepState, blocked: s.key === 'requested' && blocked }));
 
   // Done steps count fully. Evidence received counts half once some replies are in but others are still due.
@@ -46,7 +48,7 @@ export function computeProgress(d: DisputeDetail, messages: DisputeMessage[] | u
   const percent = Math.min(100, Math.round((score / flags.length) * 100));
 
   const next = decided ? (judged && result ? `Decided in the ${result.label.toLowerCase()}.` : `${outcomeText(d.outcome) ?? 'Closed'}.`)
-    : withAdmin ? 'Next: an admin confirms your decision. Nobody is told until then.'
+    : withAdmin ? 'Next: the AI reviewer rules on your decision. Nobody is told until then.'
     : !requested && onFile > 0 ? `Next: decide with the ${onFile === 1 ? 'evidence' : `${onFile} pieces of evidence`} on file, or ask for more.`
     : !requested ? 'Next: ask the seller and the buyer for the evidence you need.'
     : pending.length ? `Next: wait for ${waitingOn} to reply, or decide with what you have.`

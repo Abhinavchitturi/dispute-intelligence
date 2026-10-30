@@ -7,7 +7,30 @@ from backend.app.models.evidence import Evidence
 from backend.app.models.brief import HistoricalCase
 from backend.app.models.audit import AuditEvent
 from backend.app.models.message import DisputeMessage
+from backend.app.models.team import AIReview, CaseCollaborator, CaseRequest, Email, Flag, ManagerAlert, Notification, Strike, User
 from backend.app.services.priority_service import calculate_priority_score
+
+def _seed_answered_requests(db: Session, dispute_id: str, reason: str, now: datetime) -> None:
+    """Gives a case a finished conversation: PayPal asked the seller and the buyer, and each answered. That is what makes it ready to decide."""
+    from backend.app.services import evidence_catalog as cat
+    asks = {
+        "SELLER": (["CARRIER_TRACKING"], "Evidence request to seller", "Please send the carrier tracking for this shipment.", "Carrier tracking attached: the parcel was delivered."),
+        "BUYER": (["BUYER_STATEMENT"], "Evidence request to buyer", "Please give us your account of what happened.", "My statement is below. The parcel did not arrive as described."),
+    }
+    for n, (party, (items, subject, ask, answer)) in enumerate(asks.items()):
+        asked_at, answered_at = now - timedelta(days=2, hours=n), now - timedelta(days=1, hours=12 + n)
+        out_id, in_id = f"MSG-SEED-{dispute_id[-4:]}-{party[0]}-OUT", f"MSG-SEED-{dispute_id[-4:]}-{party[0]}-IN"
+        action = "REQUEST_SELLER_EVIDENCE" if party == "SELLER" else "REQUEST_BUYER_EVIDENCE"
+        db.add(DisputeMessage(
+            id=out_id, dispute_id=dispute_id, direction="OUTBOUND", counterparty=party, action_type=action, subject=f"{subject} for dispute {dispute_id}", body=ask, source="synthetic",
+            awaiting_reply=False, is_read=True, created_at=asked_at, meta_json=json.dumps({"requested_evidence": items, "deadline": (asked_at + timedelta(days=5)).isoformat()})))
+        db.add(DisputeMessage(
+            id=in_id, dispute_id=dispute_id, direction="INBOUND", counterparty=party, action_type=action, subject=f"Re: {subject} for dispute {dispute_id}", body=answer, source="synthetic",
+            awaiting_reply=False, in_reply_to=out_id, is_read=True, created_at=answered_at, meta_json=json.dumps({"provided_evidence": items, "unable_to_provide": []})))
+        for t in items:
+            db.add(Evidence(id=f"DEMO-EVID-{dispute_id[-4:]}-{party[0]}RQ", dispute_id=dispute_id, evidence_type=t, description=f"Provided by {party.lower()}: {answer}", source="synthetic",
+                            submitted_at=answered_at, availability_status="AVAILABLE", metadata_json=json.dumps({"provided_by": party})))
+
 
 def seed_database(db: Session = None) -> None:
     should_close = False
@@ -18,8 +41,12 @@ def seed_database(db: Session = None) -> None:
         should_close = True
 
     try:
-        # Clear existing synthetic demo data
-        db.query(DisputeMessage).filter(DisputeMessage.source == "synthetic").delete()
+        # Clear existing synthetic demo data, and the oversight records that hang off it. Accounts stay, but start unblocked.
+        for model in (Email, Flag, AIReview, Notification, ManagerAlert, Strike, CaseRequest, CaseCollaborator):
+            db.query(model).delete()
+        db.query(User).update({"is_blocked": False, "blocked_at": None, "blocked_reason": None})
+        db.query(Dispute).filter(Dispute.parent_dispute_id.isnot(None)).delete()  # appeals opened during the demo
+        db.query(DisputeMessage).filter(DisputeMessage.dispute_id.in_(db.query(Dispute.id).filter(Dispute.source == "synthetic"))).delete(synchronize_session=False)  # every message on a demo case, however it arrived
         db.query(AuditEvent).filter(AuditEvent.source == "synthetic").delete()
         db.query(Evidence).filter(Evidence.source == "synthetic").delete()
         db.query(Dispute).filter(Dispute.source == "synthetic").delete()
@@ -355,6 +382,278 @@ def seed_database(db: Session = None) -> None:
                 "carrier": "UPS",
                 "evidence_type": "TRANSACTION_LOG",
                 "evidence_desc": "Payment gateway log shows two authorizations with identical order ID."
+            },
+            {
+                "id": "DEMO-DSP-1054",
+                "buyer": "Maya Patel (maya_patel_demo)",
+                "merchant": "StreamBox",
+                "item": "Annual Streaming Plan",
+                "amount": 119.88,
+                "reason": "CANCELLED_OR_RETURNED",
+                "status": "OPEN",
+                "due_hours": 70,
+                "buyer_claim": "I cancelled the subscription in March and was still charged for the whole year.",
+                "evidence_status": "MISSING",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "Digital",
+                "evidence_type": "SUBSCRIPTION_LOG",
+                "evidence_desc": "Account log shows the cancel request on 14 March and a renewal charge on 2 April."
+            },
+            {
+                "id": "DEMO-DSP-1055",
+                "buyer": "Daniel Okafor (dokafor_demo)",
+                "merchant": "LuxeVault",
+                "item": "Designer Leather Handbag",
+                "amount": 1850.0,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED",
+                "status": "OPEN",
+                "due_hours": 30,
+                "buyer_claim": "The bag is a fake. The stitching is wrong and the serial plate does not match the brand's.",
+                "evidence_status": "CONFLICTING",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "FedEx",
+                "evidence_type": "PHOTO_PROOF",
+                "evidence_desc": "Buyer uploaded 6 photos comparing the serial plate and stitching with the brand's authentic sample."
+            },
+            {
+                "id": "DEMO-DSP-1056",
+                "buyer": "Chloe Martin (chloe_m_demo)",
+                "merchant": "TicketHub",
+                "item": "Two Concert Tickets, Row F",
+                "amount": 640.0,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+                "status": "OPEN",
+                "due_hours": 90,
+                "buyer_claim": "The tickets were never delivered to my account and the venue says the barcodes are invalid.",
+                "evidence_status": "MISSING",
+                "tracking_status": "DELIVERED",
+                "addr_match": "unknown",
+                "carrier": "Digital",
+                "evidence_type": "TRANSACTION_LOG",
+                "evidence_desc": "Delivery log shows the e-tickets were emailed once and the barcodes were reissued twice since."
+            },
+            {
+                "id": "DEMO-DSP-1057",
+                "buyer": "Ethan Brooks (ebrooks_demo)",
+                "merchant": "NorthWind Outdoor",
+                "item": "Four-Season Tent",
+                "amount": 185.0,
+                "reason": "CANCELLED_OR_RETURNED",
+                "status": "OPEN",
+                "due_hours": 60,
+                "buyer_claim": "It arrived three weeks late so I cancelled and sent it back. No refund yet.",
+                "evidence_status": "PARTIAL",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "UPS",
+                "evidence_type": "RETURN_CARRIER_TRACKING",
+                "evidence_desc": "Return label scanned at the carrier 9 days ago; the warehouse has not logged receipt."
+            },
+            {
+                "id": "DEMO-DSP-1058",
+                "buyer": "Sofia Rossi (sofia_r_demo)",
+                "merchant": "StrideShoes",
+                "item": "Running Shoes, Size 8",
+                "amount": 145.0,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED",
+                "status": "OPEN",
+                "due_hours": 110,
+                "buyer_claim": "I ordered size 8 and got size 6. The seller says returns are not accepted on sale items.",
+                "evidence_status": "PARTIAL",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "USPS",
+                "evidence_type": "MERCHANT_CORRESPONDENCE",
+                "evidence_desc": "Messages show the seller refusing the return and quoting a policy not on the listing."
+            },
+            {
+                "id": "DEMO-DSP-1059",
+                "buyer": "Marcus Lee (mlee_demo)",
+                "merchant": "CryptoGear",
+                "item": "Hardware Wallet Pro",
+                "amount": 2400.0,
+                "reason": "UNAUTHORISED",
+                "status": "OPEN",
+                "due_hours": 14,
+                "buyer_claim": "I did not order this. My account was used from a device I do not own.",
+                "evidence_status": "CONFLICTING",
+                "tracking_status": "DELIVERED",
+                "addr_match": "no",
+                "carrier": "DHL",
+                "evidence_type": "IP_AND_DEVICE_LOG",
+                "evidence_desc": "Login came from a new device in another country 20 minutes before the order was placed."
+            },
+            {
+                "id": "DEMO-DSP-1060",
+                "buyer": "Priya Nair (pnair_demo)",
+                "merchant": "HomeBuild Supply",
+                "item": "Three-Piece Shelving Set",
+                "amount": 410.0,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+                "status": "OPEN",
+                "due_hours": 50,
+                "buyer_claim": "Only two of the three shelves came. The box was labelled 3 of 3.",
+                "evidence_status": "PARTIAL",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "FedEx",
+                "evidence_type": "CARRIER_TRACKING",
+                "evidence_desc": "Carrier shows one parcel delivered. The order was shipped as three separate parcels."
+            },
+            {
+                "id": "DEMO-DSP-1061",
+                "buyer": "Oliver Grant (ogrant_demo)",
+                "merchant": "PetPlanet",
+                "item": "Automatic Pet Feeder",
+                "amount": 275.0,
+                "reason": "CANCELLED_OR_RETURNED",
+                "status": "UNDER_REVIEW",
+                "due_hours": 40,
+                "buyer_claim": "I returned it two weeks ago as instructed and was promised a refund that never came.",
+                "evidence_status": "COMPLETE",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "UPS",
+                "evidence_type": "RETURN_CARRIER_TRACKING",
+                "evidence_desc": "Return tracking shows delivery to the seller's warehouse, signed for by a staff member."
+            },
+            {
+                "id": "DEMO-DSP-1062",
+                "buyer": "Hannah Weiss (hweiss_demo)",
+                "merchant": "TechBazaar",
+                "item": "15-inch Laptop, 32GB RAM",
+                "amount": 1320.0,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED",
+                "status": "OPEN",
+                "due_hours": 24,
+                "buyer_claim": "The listing said 32GB RAM and a newer processor. The laptop has 16GB and an older chip.",
+                "evidence_status": "CONFLICTING",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "UPS",
+                "evidence_type": "PHOTO_PROOF",
+                "evidence_desc": "Buyer's system information screen shows 16GB RAM and the previous-generation processor."
+            },
+            {
+                "id": "DEMO-DSP-1063",
+                "buyer": "Ravi Menon (rmenon_demo)",
+                "merchant": "PixelCraft Studio",
+                "item": "Brand Identity Package",
+                "amount": 520.0,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+                "status": "OPEN",
+                "due_hours": 100,
+                "buyer_claim": "The designer took the money and never sent the logo files after the first draft.",
+                "evidence_status": "MISSING",
+                "tracking_status": "DELIVERED",
+                "addr_match": "unknown",
+                "carrier": "Digital",
+                "evidence_type": "MERCHANT_CORRESPONDENCE",
+                "evidence_desc": "Message thread shows one draft sent, then no reply for 18 days."
+            },
+            {
+                "id": "DEMO-DSP-1064",
+                "buyer": "Grace Kim (grace_k_demo)",
+                "merchant": "StreamBox",
+                "item": "Premium Plan, Monthly",
+                "amount": 59.0,
+                "reason": "DUPLICATE_TRANSACTION",
+                "status": "OPEN",
+                "due_hours": 85,
+                "buyer_claim": "I was charged for the monthly plan twice on the same day.",
+                "evidence_status": "COMPLETE",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "Digital",
+                "evidence_type": "TRANSACTION_LOG",
+                "evidence_desc": "Billing log shows two renewals 40 seconds apart under the same subscription."
+            },
+            {
+                "id": "DEMO-DSP-1065",
+                "buyer": "Lucas Almeida (lalmeida_demo)",
+                "merchant": "BrightHome",
+                "item": "Espresso Machine",
+                "amount": 230.0,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+                "status": "OPEN",
+                "due_hours": 8,
+                "buyer_claim": "The tracking says delivered but it was left with a neighbour I do not know.",
+                "evidence_status": "CONFLICTING",
+                "tracking_status": "DELIVERED",
+                "addr_match": "no",
+                "carrier": "USPS",
+                "evidence_type": "GPS_COORDINATES",
+                "evidence_desc": "Delivery scan is 140 metres from the shipping address, on a different street."
+            },
+            {
+                "id": "DEMO-DSP-1066",
+                "buyer": "Amelia Shaw (ashaw_demo)",
+                "merchant": "Oak & Iron Furniture",
+                "item": "Solid Oak Dining Table",
+                "amount": 760.0,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED",
+                "status": "OPEN",
+                "due_hours": 44,
+                "buyer_claim": "The table arrived with a deep crack across the top. The box was crushed on one corner.",
+                "evidence_status": "PARTIAL",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "XPO Logistics",
+                "evidence_type": "PHOTO_PROOF",
+                "evidence_desc": "Buyer photos show a crushed corner on the carton and a crack running across the table top."
+            },
+            {
+                "id": "DEMO-DSP-1067",
+                "buyer": "Noah Fischer (nfischer_demo)",
+                "merchant": "GameVault",
+                "item": "Gift Card, 100 USD",
+                "amount": 100.0,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED",
+                "status": "RESOLVED",
+                "due_hours": -30,
+                "buyer_claim": "The gift card code was already used when I tried to redeem it.",
+                "evidence_status": "COMPLETE",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "Digital",
+                "evidence_type": "TRANSACTION_LOG",
+                "evidence_desc": "Issuer log shows the code was redeemed 6 minutes before the buyer's first attempt, from another account."
+            },
+            {
+                "id": "DEMO-DSP-1069",
+                "buyer": "Marcus Bell (mbell_demo)",
+                "merchant": "NorthPeak Outfitters",
+                "item": "Insulated Hiking Jacket (L)",
+                "amount": 240.00,
+                "reason": "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+                "status": "UNDER_REVIEW",
+                "due_hours": 60,
+                "buyer_claim": "I never got my jacket. The tracking says delivered but nothing came.",
+                "evidence_status": "COMPLETE",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "UPS",
+                "evidence_type": "PROOF_OF_DELIVERY_SIGNATURE",
+                "evidence_desc": "Delivery signed for by M. Bell at the address on the order."
+            },
+            {
+                "id": "DEMO-DSP-1068",
+                "buyer": "Isabel Torres (itorres_demo)",
+                "merchant": "SunWear",
+                "item": "Linen Summer Dress",
+                "amount": 89.0,
+                "reason": "CANCELLED_OR_RETURNED",
+                "status": "CLOSED",
+                "due_hours": -50,
+                "buyer_claim": "I sent the dress back within the return window and the seller kept the money.",
+                "evidence_status": "COMPLETE",
+                "tracking_status": "DELIVERED",
+                "addr_match": "yes",
+                "carrier": "USPS",
+                "evidence_type": "RETURN_CARRIER_TRACKING",
+                "evidence_desc": "Return delivered to the seller 12 days ago. No refund was issued."
             }
         ]
 
@@ -421,7 +720,7 @@ def seed_database(db: Session = None) -> None:
                 amount=c["amount"],
                 currency="USD",
                 response_due_date=due_date,
-                created_at=now - timedelta(days=2),
+                created_at=due_date - timedelta(days=5),   # every case has 5 days
                 updated_at=now - timedelta(hours=12),
                 buyer_claim=c["buyer_claim"],
                 evidence_status=c["evidence_status"]
@@ -463,6 +762,10 @@ def seed_database(db: Session = None) -> None:
                 created_at=now - timedelta(days=1)
             )
             db.add(audit_evt)
+
+            # A case that starts out "Ready to decide" must have earned it: both the seller and the buyer were asked and have answered.
+            if c["status"] == "UNDER_REVIEW":
+                _seed_answered_requests(db, c["id"], c["reason"], now)
 
         # ==========================================
         # 3. 20 SYNTHETIC HISTORICAL CASES
@@ -746,14 +1049,24 @@ def seed_database(db: Session = None) -> None:
             db.add(hist_obj)
 
         db.flush()
-        # Hand half of the open cases to the signed-in investigator so "Your cases" has something in it. The rest are unassigned.
-        open_cases = db.query(Dispute).filter(Dispute.status.notin_(["RESOLVED", "CLOSED"])).order_by(Dispute.id).all()
-        for i, case in enumerate(open_cases):
-            if i % 2 == 0:
-                case.assigned_to = "Abhinav Chitturi"
+        # High-profile open cases go to the manager (PayPal). The rest are shared between the three investigators, so everyone has work.
+        from backend.app.services.high_profile import is_high_profile
+        team = ["Abhinav Chitturi", "Susmitha", "Jahnavi"]
+        mine = 0
+        keep_unassigned = {"DEMO-DSP-1056", "DEMO-DSP-1058", "DEMO-DSP-1063", "DEMO-DSP-1065"}   # new arrivals nobody has taken yet, at different stages of their 5 days
+        for case in db.query(Dispute).filter(Dispute.status.notin_(["RESOLVED", "CLOSED"])).order_by(Dispute.id).all():
+            if case.id == "DEMO-DSP-1069":
+                case.assigned_to = "Abhinav Chitturi"   # a clear seller win, ready for the demo of the end-of-case notices
+            elif case.id in keep_unassigned:
+                case.assigned_to = None
+            elif is_high_profile(case):
+                case.assigned_to = "PayPal"
+            else:
+                case.assigned_to = team[mine % len(team)]
+                mine += 1
 
         db.commit()
-        print(f"Successfully seeded database with 12 disputes, 20 historical cases, transactions, shipments, and evidence.")
+        print(f"Successfully seeded database with 28 disputes, 20 historical cases, transactions, shipments, and evidence.")
 
     except Exception as e:
         db.rollback()
@@ -770,7 +1083,13 @@ if __name__ == "__main__":
 # Bump when the meaning of the demo data changes, so databases seeded earlier are refreshed once on startup.
 # v2: cases are seen from PayPal's side (OPEN means nobody has been asked for evidence yet).
 # v3: cases have an owner (assigned_to).
-SEED_VERSION = "3"
+# v9: cases seeded as Ready to decide now have a real conversation behind them (both sides answered).
+# v8: fifteen more cases (subscriptions, counterfeits, tickets, services, partial shipments), some still unassigned.
+# v7: every case has a 5-day window and the score rises with the clock.
+# v6: high-profile means price only, so who owns what is worked out again.
+# v5: three investigators and a manager (PayPal); high-profile cases go to the manager.
+# v4: decisions go to the AI reviewer (PENDING_AI_REVIEW), with strikes, alerts and appeals.
+SEED_VERSION = "10"
 
 
 def ensure_seed_current(db: Session) -> str:

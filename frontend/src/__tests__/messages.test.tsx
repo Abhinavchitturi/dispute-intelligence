@@ -124,10 +124,10 @@ describe('MessageThread (PayPal, the seller and the buyer)', () => {
     expect(screen.queryByRole('button', { name: /Ready to decide/i })).not.toBeInTheDocument();
   });
 
-  it('says a decision is with an admin and not yet sent', async () => {
+  it('says a decision is with the AI reviewer and not yet sent', async () => {
     global.fetch = talk(() => [toSeller({ awaiting_reply: false }), sellerReply({ is_read: true })]);
-    render(wrap(<MessageThread disputeId="D-1" disputeStatus="PENDING_ADMIN_REVIEW" onTakeAction={vi.fn()} />));
-    expect(await screen.findByRole('status')).toHaveTextContent('Waiting for an admin');
+    render(wrap(<MessageThread disputeId="D-1" disputeStatus="PENDING_AI_REVIEW" onTakeAction={vi.fn()} />));
+    expect(await screen.findByRole('status')).toHaveTextContent('With the AI reviewer');
     expect(screen.queryByRole('button', { name: /Ready to decide/i })).not.toBeInTheDocument();
   });
 
@@ -150,10 +150,10 @@ describe('MessageThread (PayPal, the seller and the buyer)', () => {
     await waitFor(() => expect(calls.some((u) => u.endsWith('/messages/read'))).toBe(true));
   });
 
-  it("is honest that real replies aren't synced", async () => {
+  it('says a real reply arrives by email, and offers no simulate buttons', async () => {
     global.fetch = talk(() => [toSeller({ source: 'paypal_sandbox', reply_due_at: null })], undefined, detail({ source: 'paypal_sandbox' }));
     render(wrap(<MessageThread disputeId="D-1" />));
-    expect(await screen.findByText(/aren't synced into this app yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/Their reply arrives by email and shows up here/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Simulate/i })).not.toBeInTheDocument();
   });
 
@@ -214,7 +214,7 @@ describe('Messages workspace', () => {
     thread({ dispute_id: 'D-1', state: 'WAITING', waiting_on: 'Seller and buyer' }),
     thread({ dispute_id: 'D-2', state: 'YOUR_TURN', waiting_on: null, unread_count: 1, dispute_status: 'UNDER_REVIEW', last_direction: 'INBOUND', last_message_preview: 'Thank you.', pending_message_ids: [] }),
     thread({ dispute_id: 'D-3', state: 'CLOSED', waiting_on: null, dispute_status: 'RESOLVED', outcome: 'BUYER_FAVOR', pending_message_ids: [] }),
-    thread({ dispute_id: 'D-4', state: 'IN_REVIEW', waiting_on: null, dispute_status: 'PENDING_ADMIN_REVIEW', pending_message_ids: [] }),
+    thread({ dispute_id: 'D-4', state: 'IN_REVIEW', waiting_on: null, dispute_status: 'PENDING_AI_REVIEW', pending_message_ids: [] }),
     thread({ dispute_id: 'D-5', state: 'CLOSED', waiting_on: null, dispute_status: 'CLOSED', outcome: 'SETTLED', pending_message_ids: [] }),
   ];
   const api = () => vi.fn().mockImplementation((url: string) => {
@@ -233,7 +233,7 @@ describe('Messages workspace', () => {
     expect(within(list).getAllByRole('button')).toHaveLength(5);
     expect(within(list).getByText('Waiting on seller and buyer')).toBeInTheDocument();
     expect(within(list).getByText('Ready to decide')).toBeInTheDocument();
-    expect(within(list).getByText('With admin')).toBeInTheDocument();
+    expect(within(list).getByText('With AI review')).toBeInTheDocument();
     expect(within(list).getByText("Decided: buyer's favor")).toBeInTheDocument();
     expect(within(list).getByText('Settled outside PayPal')).toBeInTheDocument();
     expect(within(list).getByLabelText('1 unread')).toBeInTheDocument();

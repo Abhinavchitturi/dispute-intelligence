@@ -84,8 +84,8 @@ class DecisionSubmitRequest(BaseModel):
 
 class AdminReviewRequest(BaseModel):
     action: str  # APPROVE, OVERRIDE or REOPEN
-    reviewer: str
-    role: str = "ADMIN"
+    reviewer: str = ""
+    role: str = "MANAGER"       # only read when sign-in is off; otherwise the signed-in user decides
     outcome: Optional[str] = None   # OVERRIDE only: the admin's own call
     note: Optional[str] = None
     message: Optional[str] = None   # the notice both parties will get (APPROVE and OVERRIDE)

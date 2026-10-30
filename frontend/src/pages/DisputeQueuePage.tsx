@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowDownUp, ChevronRight, Eye, FilterX, Gavel, HandHelping, Inbox, RefreshCw } from 'lucide-react';
-import { assignDispute, fetchDisputeDetail, fetchDisputes } from '../api/client';
+import { ArrowDownUp, ChevronRight, Eye, FilterX, Gavel, Inbox, RefreshCw, Share2 } from 'lucide-react';
+import { fetchDisputeDetail, fetchDisputes } from '../api/client';
+import { AssignSelect } from '../components/AssignSelect';
+import { DistributeDialog } from '../components/DistributeDialog';
 import { DisputeSummary } from '../types';
 import { Badge, Button, Card, Drawer, EmptyState, ErrorState, KeyValue, Meter, PageHeader, SearchInput, Segmented, Select, Skeleton } from '../components/ui/kit';
 import { EvidenceBadge, StatusBadge } from '../components/ui/StatusBadges';
@@ -11,8 +13,8 @@ import { cn, isUrgent, money, OPEN_STATUSES, reasonLabel, timeLeft, WAITING_STAT
 import { useDebounced, useNow } from '../lib/hooks';
 import { useCurrentUser } from '../lib/user';
 
-type View = 'all' | 'mine' | 'new' | 'waiting' | 'ready' | 'review' | 'urgent' | 'due';
-const VIEWS: View[] = ['all', 'mine', 'new', 'waiting', 'ready', 'review', 'urgent', 'due'];
+type View = 'all' | 'mine' | 'high' | 'unassigned' | 'ai' | 'progress' | 'new' | 'waiting' | 'ready' | 'review' | 'urgent' | 'due';
+const VIEWS: View[] = ['all', 'mine', 'high', 'unassigned', 'ai', 'progress', 'new', 'waiting', 'ready', 'review', 'urgent', 'due'];
 const SORTS = {
   priority: { by: 'priority_score', order: 'desc', label: 'Most urgent' },
   amount: { by: 'amount', order: 'desc', label: 'Highest amount' },
@@ -27,9 +29,13 @@ const REASON_OPTIONS = [
 
 function matchesView(d: DisputeSummary, view: View, now: number, me: string) {
   switch (view) {
-    case 'mine': return d.assigned_to === me; // open and finished, so a case you decided doesn't vanish
-    case 'review': return d.status === 'PENDING_ADMIN_REVIEW';
+    case 'mine': return d.assigned_to === me || (d.collaborators ?? []).includes(me); // owned or shared with you; open or finished, so a case you decided doesn't vanish
+    case 'unassigned': return OPEN_STATUSES.includes(d.status) && !d.assigned_to;
+    case 'ai': return OPEN_STATUSES.includes(d.status) && d.ai_owned;
+    case 'high': return OPEN_STATUSES.includes(d.status) && d.is_high_profile;
+    case 'review': return d.status === 'PENDING_AI_REVIEW';
     case 'new': return d.status === 'OPEN';
+    case 'progress': return d.status === 'IN_PROGRESS';
     case 'waiting': return WAITING_STATUSES.includes(d.status);
     case 'ready': return d.status === 'UNDER_REVIEW';
     case 'urgent': return OPEN_STATUSES.includes(d.status) && isUrgent(d.priority_score);
@@ -41,9 +47,9 @@ function matchesView(d: DisputeSummary, view: View, now: number, me: string) {
 export function DisputeQueuePage() {
   const navigate = useNavigate();
   const now = useNow();
-  const { user, isAdmin } = useCurrentUser();
-  const queryClient = useQueryClient();
+  const { user, isManager } = useCurrentUser();
   const [params, setParams] = useSearchParams();
+  const [distributing, setDistributing] = useState(false);
 
   const initialView: View = VIEWS.includes(params.get('view') as View) ? (params.get('view') as View) : params.get('priority_level') === 'high' ? 'urgent' : 'all';
 
@@ -78,14 +84,10 @@ export function DisputeQueuePage() {
   const counts = useMemo(() => {
     const list = data ?? [];
     const c = (v: View) => list.filter((d) => matchesView(d, v, now, user.name)).length;
-    return { all: list.length, mine: c('mine'), new: c('new'), waiting: c('waiting'), ready: c('ready'), review: c('review'), urgent: c('urgent'), due: c('due') };
+    return { all: list.length, mine: c('mine'), high: c('high'), unassigned: c('unassigned'), ai: c('ai'), progress: c('progress'), new: c('new'), waiting: c('waiting'), ready: c('ready'), review: c('review'), urgent: c('urgent'), due: c('due') };
   }, [data, now, user.name]);
 
   const rows = useMemo(() => (data ?? []).filter((d) => matchesView(d, view, now, user.name)), [data, view, now, user.name]);
-  const take = useMutation({
-    mutationFn: (id: string) => assignDispute(id, user.name),
-    onSuccess: () => ['disputes', 'urgentDisputes', 'dashboardSummary', 'disputeDetail'].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] })),
-  });
   const filtered = view !== 'all' || !!dq || reason !== 'ALL' || status !== 'ALL';
   const clearAll = () => { setView('all'); setSearch(''); setReason('ALL'); setStatus('ALL'); setSort('priority'); };
 
@@ -98,13 +100,16 @@ export function DisputeQueuePage() {
   return (
     <>
       <PageHeader
-        title="All Disputes"
-        subtitle="Most urgent first. Click a dispute to investigate it, or use the eye for a quick look."
-        actions={
+        title={isManager ? 'All Disputes' : 'Your cases'}
+        subtitle={isManager
+          ? 'Every case, most urgent first. Search by case, buyer, seller or transaction. Click a dispute to investigate it, or use the eye for a quick look.'
+          : 'The cases you are working, most urgent first, including any a colleague has shared with you. Click one to investigate it, or use the eye for a quick look.'}
+        actions={<>
+          {isManager && <Button size="sm" variant="primary" onClick={() => setDistributing(true)}><Share2 className="h-4 w-4" />Distribute cases</Button>}
           <Button size="sm" onClick={() => refetch()} aria-label="Refresh disputes">
             <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} /> Refresh
           </Button>
-        }
+        </>}
       />
 
       <div className="space-y-4">
@@ -113,11 +118,12 @@ export function DisputeQueuePage() {
           onChange={setView}
           options={[
             { value: 'all', label: 'All', count: counts.all },
-            { value: 'mine', label: 'Your cases', count: counts.mine },
+            ...(isManager ? [{ value: 'mine' as View, label: 'Your cases', count: counts.mine }, { value: 'high' as View, label: 'High profile', count: counts.high }, { value: 'unassigned' as View, label: 'Unassigned', count: counts.unassigned }, { value: 'ai' as View, label: 'With the AI Agent', count: counts.ai }] : []),
             { value: 'new', label: 'New', count: counts.new },
             { value: 'waiting', label: 'Waiting on replies', count: counts.waiting },
+            { value: 'progress', label: 'In progress', count: counts.progress },
             { value: 'ready', label: 'Ready to decide', count: counts.ready },
-            ...(isAdmin ? [{ value: 'review' as View, label: 'With admin', count: counts.review }] : []),
+            { value: 'review', label: 'With AI review', count: counts.review },
             { value: 'urgent', label: 'Urgent', count: counts.urgent },
             { value: 'due', label: 'Due soon', count: counts.due },
           ]}
@@ -135,8 +141,9 @@ export function DisputeQueuePage() {
             <option value="WAITING_FOR_SELLER_RESPONSE">Waiting on seller</option>
             <option value="WAITING_FOR_BUYER_RESPONSE">Waiting on buyer</option>
             <option value="WAITING_FOR_BOTH_RESPONSES">Waiting on both</option>
+            <option value="IN_PROGRESS">In progress</option>
             <option value="UNDER_REVIEW">Ready to decide</option>
-            <option value="PENDING_ADMIN_REVIEW">With admin</option>
+            <option value="PENDING_AI_REVIEW">With AI review</option>
             <option value="RESOLVED">Resolved</option>
             <option value="CLOSED">Closed</option>
           </Select>
@@ -186,12 +193,13 @@ export function DisputeQueuePage() {
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <span className="font-mono text-[13px] font-semibold text-white">{d.id}</span>
                         <span className="text-[13px] text-muted">{reasonLabel(d.reason)}</span>
+                        {d.is_high_profile && <Badge tone="warn">High profile</Badge>}
                       </div>
                       <p className="mt-0.5 truncate text-sm text-slate-300">
                         {d.buyer_reference ?? 'Buyer'} <span className="text-muted">vs {d.merchant_reference ?? 'Seller'}</span>
                         {d.buyer_claim && <span className="text-muted"> · “{d.buyer_claim}”</span>}
                       </p>
-                      <p className="mt-0.5 text-xs text-muted">{d.assigned_to ? (d.assigned_to === user.name ? 'Yours' : `Owner: ${d.assigned_to}`) : 'Unassigned'}</p>
+                      <p className="mt-0.5 text-xs text-muted">{d.ai_owned ? 'With the AI Agent. Nobody took it in time.' : d.assigned_to ? (d.assigned_to === user.name ? 'Yours' : `Owner: ${d.assigned_to}`) : 'Unassigned'}{(d.collaborators ?? []).length > 0 && <span> · Shared with {d.collaborators.join(', ')}</span>}</p>
                     </div>
                     <div className="hidden w-40 flex-col items-start gap-1.5 lg:flex">
                       <StatusBadge status={d.status} />
@@ -203,11 +211,7 @@ export function DisputeQueuePage() {
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-muted transition group-hover:translate-x-0.5 group-hover:text-white" />
                   </button>
-                  {!d.assigned_to && OPEN_STATUSES.includes(d.status) && !isAdmin && (
-                    <Button size="sm" variant="ghost" loading={take.isPending && take.variables === d.id} onClick={() => take.mutate(d.id)} aria-label={`Take case ${d.id}`}>
-                      <HandHelping className="h-3.5 w-3.5" />Take
-                    </Button>
-                  )}
+                  {isManager && OPEN_STATUSES.includes(d.status) && <div className="mr-2 hidden shrink-0 md:block"><AssignSelect disputeId={d.id} assignedTo={d.assigned_to} /></div>}
                   <button
                     onClick={() => setOpen(d.id)}
                     aria-label={`Quick view ${d.id}`}
@@ -224,6 +228,7 @@ export function DisputeQueuePage() {
       )}
       {!isLoading && rows.length > 0 && <p className="text-[13px] text-muted">Showing {rows.length} of {counts.all} disputes</p>}
 
+      <DistributeDialog open={distributing} onClose={() => setDistributing(false)} />
       <PreviewDrawer id={openId} onClose={() => setOpen(null)} onOpenCase={(id) => navigate(`/investigate/${id}`)} />
     </>
   );

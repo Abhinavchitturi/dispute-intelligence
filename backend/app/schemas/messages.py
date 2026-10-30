@@ -22,6 +22,10 @@ class MessageSchema(BaseModel):
     provided_evidence: List[str] = []    # inbound reply: what they sent
     unavailable_evidence: List[str] = [] # inbound reply: what they couldn't provide
     deadline: Optional[str] = None       # outbound request: reply-by date
+    emailed_to: Optional[str] = None     # outbound request: where it was emailed
+    email_status: Optional[str] = None   # QUEUED (kept here, not sent), SENT or FAILED
+    needs_recording: bool = False        # an emailed reply that still has to be gone through
+    attachments: List[str] = []          # files that came with an emailed reply
     created_at: datetime
 
 

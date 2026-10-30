@@ -9,21 +9,20 @@ import { MessageThread } from '../components/MessageThread';
 import { ActionWizard } from '../components/ActionWizard';
 import { money, outcomeText, reasonLabel, timeAgo } from '../lib/format';
 import { useNow } from '../lib/hooks';
-import { useCurrentUser } from '../lib/user';
 
 type Filter = 'waiting' | 'turn' | 'all';
 
 function StateBadge({ t }: { t: MessageThreadSummary }) {
   if (t.state === 'WAITING') return <Badge tone="info" dot>Waiting on {t.waiting_on?.toLowerCase()}</Badge>;
+  if (t.state === 'IN_PROGRESS') return <Badge tone="neutral" dot>In progress</Badge>;
   if (t.state === 'YOUR_TURN') return <Badge tone="brand" dot>Ready to decide</Badge>;
-  if (t.state === 'IN_REVIEW') return <Badge tone="warn" dot>With admin</Badge>;
+  if (t.state === 'IN_REVIEW') return <Badge tone="warn" dot>With AI review</Badge>;
   return <Badge tone="success">{outcomeText(t.outcome) ?? 'Closed'}</Badge>;
 }
 
 export function MessagesPage() {
   const navigate = useNavigate();
   const now = useNow(5000);
-  const { isAdmin } = useCurrentUser();
   const [params, setParams] = useSearchParams();
   const [filter, setFilter] = useState<Filter>('all');
   // Taking action happens right here, in a popup over the conversation, so you never leave the page.
@@ -67,7 +66,7 @@ export function MessagesPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {selected.state !== 'CLOSED' && selected.state !== 'IN_REVIEW' && !isAdmin && <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>Take action</Button>}
+              {selected.state !== 'CLOSED' && selected.state !== 'IN_REVIEW' && <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>Take action</Button>}
               <Button size="sm" onClick={() => navigate(`/investigate/${selected.dispute_id}`)}>Open case <ArrowRight className="h-3.5 w-3.5" /></Button>
             </div>
           </div>
@@ -76,7 +75,7 @@ export function MessagesPage() {
           disputeId={selected.dispute_id}
           disputeStatus={selected.dispute_status}
           outcome={selected.outcome}
-          onTakeAction={isAdmin ? undefined : () => setWizardOpen(true)}
+          onTakeAction={() => setWizardOpen(true)}
         />
         <ActionWizard
           open={wizardOpen}

@@ -99,23 +99,22 @@ describe('ResolveIQ Page Components Suite', () => {
     // Check loading indicator or text
     await waitFor(() => {
       expect(screen.getByText(/Dispute Overview/i)).toBeInTheDocument();
-      expect(screen.getAllByText('12').length).toBeGreaterThan(0); // total open disputes
       expect(screen.getAllByText('3').length).toBeGreaterThan(0); // deadlines < 48h
     });
 
-    // The tiles tell PayPal where cases stand: yours, open, due soon, waiting on a party, ready to decide.
+    // The tiles show only what needs action: yours, due soon, waiting on a party, ready to decide. There is no "open disputes" total.
     for (const [label, count, hint] of [
       ['Your cases', '4', 'Open cases you are working'],
-      ['Open disputes', '12', '2 new, nobody asked yet'],
       ['Decide within 48 hours', '3', 'Target date is close or passed'],
       ['Waiting on replies', '3', 'Seller or buyer owes us evidence'],
-      ['Ready to decide', '5', 'Time is up or the evidence is in. Decide now'],
+      ['Ready to decide', '5', 'Both sides have answered, or time is up. Decide now'],
     ]) {
       const tile = screen.getByText(label).closest('button') as HTMLElement;
       expect(tile).toHaveTextContent(count);
       expect(tile).toHaveTextContent(hint);
     }
     expect(screen.queryByText(/Waiting on seller/i)).not.toBeInTheDocument(); // the old seller-side tile
+    expect(screen.queryByText('Open disputes')).not.toBeInTheDocument();      // a total of everything open isn't something anyone acts on
 
     // Each tile opens the matching list. "Your cases" is the investigator's own.
     fireEvent.click(screen.getByText('Your cases').closest('button') as HTMLElement);
@@ -145,7 +144,7 @@ describe('ResolveIQ Page Components Suite', () => {
     renderWithProviders(<DisputeQueuePage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/All Disputes/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Your cases' })).toBeInTheDocument();   // an investigator's list is their own cases
       expect(screen.getByText('DEMO-DSP-1042')).toBeInTheDocument();
       expect(screen.getByText(/Alex Morgan/i)).toBeInTheDocument();
       expect(screen.getByText('USD 450.00')).toBeInTheDocument();

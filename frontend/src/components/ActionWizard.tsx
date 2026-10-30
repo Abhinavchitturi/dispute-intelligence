@@ -27,8 +27,9 @@ const HINTS: Record<string, string> = {
   WAITING_FOR_SELLER_RESPONSE: 'Waiting on the seller. You can ask more, or decide with what you have.',
   WAITING_FOR_BUYER_RESPONSE: 'Waiting on the buyer. You can ask more, or decide with what you have.',
   WAITING_FOR_BOTH_RESPONSES: 'Waiting on the seller and the buyer. You can ask more, or decide with what you have.',
-  UNDER_REVIEW: 'The evidence is in, or the reply deadline has passed. Review what you have and decide.',
-  PENDING_ADMIN_REVIEW: 'A decision on this case is with an admin. It has to be reopened before you can act.',
+  IN_PROGRESS: 'Some evidence is in, but not from both sides yet. Ask the rest, or decide with what you have.',
+  UNDER_REVIEW: 'Both sides have answered, or the reply deadline has passed. Review what you have and decide.',
+  PENDING_AI_REVIEW: 'A decision on this case is with the AI reviewer. A manager has to reopen it before you can act.',
 };
 
 /** Where the case stands, in a sentence. One concrete document on file is enough to decide, so say so. */
@@ -115,7 +116,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
 }) {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const { user } = useCurrentUser();
+  const { isManager } = useCurrentUser();
   const [step, setStep] = useState(0);
   // Asking can be combined (seller and buyer together). Deciding is its own page, reached with "Ready to decide".
   const [selected, setSelected] = useState<ActionValue[]>(['REQUEST_SELLER_EVIDENCE']);
@@ -183,7 +184,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
   });
 
   const decide = useMutation({
-    mutationFn: (outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR') => submitDecision(disputeId, { outcome, reason: reason.trim(), actor: user.name }),
+    mutationFn: (outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR') => submitDecision(disputeId, { outcome, reason: reason.trim() }),
     onSuccess: (r) => {
       onDone({ message: r.message, env: 'demo', audit: 'Decision submitted' });
       toast('success', r.message);
@@ -203,7 +204,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
 
   const onFileCount = detail.data?.evidence_items.filter((e) => e.availability_status === 'AVAILABLE').length ?? 0;
   const hint = detail.data ? hintFor(detail.data.status, onFileCount) : undefined;
-  const inReview = detail.data?.status === 'PENDING_ADMIN_REVIEW';
+  const inReview = detail.data?.status === 'PENDING_AI_REVIEW';
   const canContinue = step === 0 || (step === 1 && slots.every((s) => s.choicesReady && !s.loading && !!s.message.trim() && s.chosen.length > 0));
   const previewsOk = previews.every((p) => !!p.data?.is_supported && !p.isLoading);
   const reasonOk = reason.trim().length >= MIN_REASON;
@@ -346,7 +347,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
           )}
           {detail.data?.review_note && detail.data.status === 'UNDER_REVIEW' && (
             <p role="note" className="rounded-xl border border-amber-400/25 bg-amber-400/[.07] px-3 py-2.5 text-[13px] text-amber-100">
-              <span className="font-semibold">{detail.data.reviewed_by ?? 'An admin'} sent this back:</span> {detail.data.review_note}
+              <span className="font-semibold">{detail.data.reviewed_by ?? 'A manager'} sent this back:</span> {detail.data.review_note}
             </p>
           )}
           <div>
@@ -357,7 +358,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
           </div>
           {/* Deciding is a different kind of step, so it doesn't sit among the choices. */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
-            <p className="max-w-sm text-[13px] text-muted">Have what you need? Review everything on file and make your call. An admin confirms it before anyone is told.</p>
+            <p className="max-w-sm text-[13px] text-muted">{isManager ? 'Have what you need? Review everything on file and make your call. As manager, your decision is final and the seller and the buyer are told at once.' : 'Have what you need? Review everything on file and make your call. The AI reviewer checks it before anyone is told.'}</p>
             <Button onClick={readyToDecide} disabled={inReview}><Gavel className="h-4 w-4" />Ready to decide</Button>
           </div>
         </div>
@@ -401,7 +402,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
                 placeholder="For example: the carrier confirmed delivery to the address on the order, and the buyer sent no footage."
               />
             </Field>
-            <p className="flex gap-2 text-xs text-muted"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />Your reason goes to an admin with your decision. The seller and the buyer are told only after the admin confirms it. The admin can send it back.</p>
+            <p className="flex gap-2 text-xs text-muted"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />{isManager ? 'As manager, your decision is final. There is no AI review. The seller and the buyer are told straight away, and each gets an email listing the proof both sides sent.' : 'Your reason goes to the AI reviewer with your decision. The seller and the buyer are told once it rules. If it overturns you, that is a strike, and you can flag it to a manager if you think it is wrong.'}</p>
             <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-raised/40 p-3 text-sm text-slate-200">
               <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#0A84FF]" />
               <span>I've reviewed the evidence on file and I'm making this decision.</span>
@@ -414,7 +415,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
                 <ThumbsDown className="h-4 w-4" />Seller's favor
               </Button>
             </div>
-            {!reasonOk && reason.length > 0 && <p className="text-xs text-amber-300">Add a little more. The admin needs to see your reasoning.</p>}
+            {!reasonOk && reason.length > 0 && <p className="text-xs text-amber-300">Add a little more. The reviewer needs to see your reasoning.</p>}
           </section>
         </div>
       )}
@@ -437,6 +438,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
                       <div><dt className="text-xs uppercase tracking-wider text-muted">Environment</dt><dd className="mt-1"><Badge tone="violet">{titleCase(p.data.target_environment)}</Badge></dd></div>
                     </dl>
                     <p className="text-sm text-slate-300"><span className="font-medium text-white">What happens: </span>{p.data.impact_summary}</p>
+                    <p className="flex gap-2 text-[13px] text-muted"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />The {party} isn't on this app, so this goes to them by email. They reply by email, and the reply comes back to this case for you to go through.</p>
                     {p.data.warning_message && (
                       <div className="flex gap-2 rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-sm text-amber-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{p.data.warning_message}</div>
                     )}

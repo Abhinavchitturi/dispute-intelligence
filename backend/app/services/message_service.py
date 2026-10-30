@@ -12,9 +12,11 @@ from backend.app.models.message import DisputeMessage
 from backend.app.schemas.messages import ThreadSummary
 from backend.app.services import evidence_catalog as cat
 from backend.app.services.audit_service import AuditService
+from backend.app.services import email_service
 
-PENDING_REVIEW = "PENDING_ADMIN_REVIEW"  # an investigator proposed a decision and an admin has yet to confirm it
-OPEN_STATUSES = ["OPEN", "WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "WAITING_FOR_BOTH_RESPONSES", "UNDER_REVIEW", PENDING_REVIEW]
+PENDING_REVIEW = "PENDING_AI_REVIEW"  # an investigator proposed a decision and the AI reviewer has yet to rule on it
+IN_PROGRESS = "IN_PROGRESS"  # some evidence is in, but the case is not ready to decide yet
+OPEN_STATUSES = ["OPEN", "WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "WAITING_FOR_BOTH_RESPONSES", IN_PROGRESS, "UNDER_REVIEW", PENDING_REVIEW]
 CLOSED = ("RESOLVED", "CLOSED")
 
 REQUEST_ACTIONS = {"REQUEST_SELLER_EVIDENCE": cat.SELLER, "REQUEST_BUYER_EVIDENCE": cat.BUYER}
@@ -40,6 +42,25 @@ def _party_label(party: str) -> str:
     return "Seller" if party == cat.SELLER else "Buyer"
 
 
+KEEP_FOR_SELLER = ("DECISION", "WHAT HAPPENS NEXT", "REVIEW", "MANAGER REVIEW", "INVESTIGATOR REVIEW")
+
+
+def short_notice(full: str) -> str:
+    """The seller only needs the outcome, what happens next and the review. The full write-up goes to the buyer."""
+    blocks, current = [], []
+    for line in full.split("\n"):
+        t = line.strip()
+        if t and t == t.upper() and t.replace(" ", "").isalpha():
+            current = [t]
+            blocks.append(current)
+        elif current:
+            current.append(line)
+        elif not blocks:
+            blocks.append([line])  # the header line
+    kept = [b for b in blocks if b[0] in KEEP_FOR_SELLER or not b[0].isupper()]
+    return "\n\n".join("\n".join(b).strip() for b in kept).strip() or full
+
+
 class MessageService:
     """Stores every message PayPal sends and, in demo mode, simulates how the seller and buyer answer."""
 
@@ -53,7 +74,8 @@ class MessageService:
 
     @classmethod
     def status_from_requests(cls, db: Session, dispute: Dispute) -> str:
-        """Who is the case waiting on? Nobody means the evidence is in and PayPal can decide."""
+        """Where the case stands. Waiting while anyone owes a reply. Ready to decide only once BOTH the seller and the buyer have answered,
+        or a reply deadline has passed. In between (one side has answered, the other not asked yet) it is simply in progress."""
         pending = cls.pending_parties(db, dispute.id)
         if cat.SELLER in pending and cat.BUYER in pending:
             return "WAITING_FOR_BOTH_RESPONSES"
@@ -61,7 +83,13 @@ class MessageService:
             return "WAITING_FOR_SELLER_RESPONSE"
         if cat.BUYER in pending:
             return "WAITING_FOR_BUYER_RESPONSE"
-        return "UNDER_REVIEW"
+        asked = db.query(DisputeMessage).filter(DisputeMessage.dispute_id == dispute.id, DisputeMessage.direction == "OUTBOUND",
+                                                DisputeMessage.action_type.in_(list(REQUEST_ACTIONS))).all()
+        if not asked:
+            return "OPEN"
+        timed_out = any(m._meta().get("expired") for m in asked)
+        answered = {m.counterparty for m in asked if not m.awaiting_reply}
+        return "UNDER_REVIEW" if timed_out or {cat.SELLER, cat.BUYER} <= answered else IN_PROGRESS
 
     # ---------- outbound ----------
     @classmethod
@@ -85,6 +113,10 @@ class MessageService:
             created_at=now,
         )
         db.add(msg)
+        mail = email_service.request_email(db, dispute, party, msg.subject, msg.body, requested_evidence, (now + timedelta(days=deadline_days)).isoformat())
+        meta = msg._meta()
+        meta.update({"emailed_to": mail.to_address, "email_status": mail.status, "email_id": mail.id})
+        msg.meta_json = json.dumps(meta)
         db.commit()
         db.refresh(msg)
         dispute.status = cls.status_from_requests(db, dispute)
@@ -100,11 +132,12 @@ class MessageService:
         now = datetime.utcnow()
         label = ACTION_LABEL[action_type]
         msgs = []
+        full = (body or "").strip() or f"{label}. No message text was provided."
         for party in (cat.SELLER, cat.BUYER):
             msgs.append(DisputeMessage(
                 id=_new_id(), dispute_id=dispute.id, direction="OUTBOUND", counterparty=party, action_type=action_type,
                 subject=subject or f"{label} for dispute {dispute.id}",
-                body=(body or "").strip() or f"{label}. No message text was provided.",
+                body=short_notice(full) if party == cat.SELLER else f"{full}\n\n{email_service.appeal_text(dispute)}",
                 source="paypal_sandbox" if sandbox else "synthetic", awaiting_reply=False, reply_due_at=None,
                 is_read=True, audit_event_id=audit_event_id, created_at=now,
             ))
@@ -114,6 +147,7 @@ class MessageService:
             {"awaiting_reply": False, "reply_due_at": None})
         dispute.status = "RESOLVED"
         dispute.outcome = DECISION_ACTIONS[action_type]
+        email_service.decision_emails(db, dispute, dispute.outcome)  # the seller and buyer each get an email that lists the evidence
         db.commit()
         return msgs
 
@@ -216,6 +250,10 @@ class MessageService:
         """Creates the party's simulated answer to one evidence request and moves the case along."""
         if not outbound.awaiting_reply or outbound.action_type not in REQUEST_ACTIONS:
             return None
+        # A real emailed reply is already waiting to be gone through, so the demo doesn't invent a second one.
+        if db.query(DisputeMessage).filter(DisputeMessage.in_reply_to == outbound.id, DisputeMessage.direction == "INBOUND").first():
+            outbound.reply_due_at = None
+            return None
         now = now or datetime.utcnow()
         dispute = db.query(Dispute).filter(Dispute.id == outbound.dispute_id).first()
         party = outbound.counterparty
@@ -306,9 +344,11 @@ class MessageService:
         elif dispute.status in CLOSED:
             state, waiting_on = "CLOSED", None
         elif dispute.status == PENDING_REVIEW:
-            state, waiting_on = "IN_REVIEW", None  # the investigator has decided and an admin is checking it
+            state, waiting_on = "IN_REVIEW", None  # the investigator has decided and the AI reviewer is checking it
+        elif dispute.status == "UNDER_REVIEW":
+            state, waiting_on = "YOUR_TURN", None  # both sides have answered, so it's PayPal's move
         else:
-            state, waiting_on = "YOUR_TURN", None  # every request has been answered, so it's PayPal's move
+            state, waiting_on = "IN_PROGRESS", None  # some evidence is in, but not from both sides yet
         preview = " ".join(last.body.split())
         return ThreadSummary(
             dispute_id=dispute.id, buyer_reference=dispute.buyer_reference, merchant_reference=dispute.merchant_reference,
@@ -326,7 +366,8 @@ class MessageService:
         )
 
     @classmethod
-    def list_threads(cls, db: Session) -> List[ThreadSummary]:
+    def list_threads(cls, db: Session, user=None) -> List[ThreadSummary]:
+        from backend.app.services.access import can_access
         cls.deliver_due(db)
         rows = db.query(DisputeMessage).order_by(DisputeMessage.created_at).all()
         by_dispute: dict = {}
@@ -335,6 +376,6 @@ class MessageService:
         out = []
         for did, msgs in by_dispute.items():
             d = db.query(Dispute).filter(Dispute.id == did).first()
-            if d:
+            if d and can_access(db, user, d):
                 out.append(cls.thread_for(d, msgs))
         return sorted(out, key=lambda t: t.last_message_at, reverse=True)

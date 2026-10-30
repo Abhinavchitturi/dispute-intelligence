@@ -61,25 +61,3 @@ export function useStoredState(key: string, initial: boolean) {
   };
   return [v, set] as const;
 }
-
-const ROLE_KEY = 'resolveiq.role';
-const ROLE_EVENT = 'resolveiq:role';
-const readRole = (): 'investigator' | 'admin' => {
-  try { return localStorage.getItem(ROLE_KEY) === 'admin' ? 'admin' : 'investigator'; } catch { return 'investigator'; }
-};
-
-/** Which hat you are wearing. Shared by every component, so switching it updates the whole app at once. */
-export function useStoredRole() {
-  const [role, setRoleState] = useState<'investigator' | 'admin'>(readRole);
-  useEffect(() => {
-    const sync = () => setRoleState(readRole());
-    window.addEventListener(ROLE_EVENT, sync);
-    return () => window.removeEventListener(ROLE_EVENT, sync);
-  }, []);
-  const setRole = (next: 'investigator' | 'admin') => {
-    try { localStorage.setItem(ROLE_KEY, next); } catch { /* storage unavailable */ }
-    setRoleState(next);
-    window.dispatchEvent(new Event(ROLE_EVENT));
-  };
-  return [role, setRole] as const;
-}

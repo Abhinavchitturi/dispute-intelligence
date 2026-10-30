@@ -69,8 +69,9 @@ export const reasonLabel = (reason: string) => REASONS[reason] ?? titleCase(reas
 
 export type Tone = 'neutral' | 'brand' | 'success' | 'warn' | 'danger' | 'info' | 'violet';
 
-// PayPal's view of a case. OPEN = nobody has been asked yet. WAITING_* = a party owes us evidence. UNDER_REVIEW = evidence is in, PayPal decides.
-export const OPEN_STATUSES = ['OPEN', 'WAITING_FOR_SELLER_RESPONSE', 'WAITING_FOR_BUYER_RESPONSE', 'WAITING_FOR_BOTH_RESPONSES', 'UNDER_REVIEW', 'PENDING_ADMIN_REVIEW'];
+// PayPal's view of a case. OPEN = nobody has been asked yet. WAITING_* = a party owes us evidence. IN_PROGRESS = some evidence is in, but not from both sides.
+// UNDER_REVIEW = both sides have answered (or time is up): ready to decide.
+export const OPEN_STATUSES = ['OPEN', 'WAITING_FOR_SELLER_RESPONSE', 'WAITING_FOR_BUYER_RESPONSE', 'WAITING_FOR_BOTH_RESPONSES', 'IN_PROGRESS', 'UNDER_REVIEW', 'PENDING_AI_REVIEW'];
 export const WAITING_STATUSES = ['WAITING_FOR_SELLER_RESPONSE', 'WAITING_FOR_BUYER_RESPONSE', 'WAITING_FOR_BOTH_RESPONSES'];
 export const isClosed = (status: string) => status === 'RESOLVED' || status === 'CLOSED';
 
@@ -80,8 +81,9 @@ export function statusMeta(status: string): { label: string; tone: Tone } {
     case 'WAITING_FOR_SELLER_RESPONSE': return { label: 'Waiting on seller', tone: 'info' };
     case 'WAITING_FOR_BUYER_RESPONSE': return { label: 'Waiting on buyer', tone: 'info' };
     case 'WAITING_FOR_BOTH_RESPONSES': return { label: 'Waiting on both', tone: 'info' };
+    case 'IN_PROGRESS': return { label: 'In progress', tone: 'neutral' };
     case 'UNDER_REVIEW': return { label: 'Ready to decide', tone: 'violet' };
-    case 'PENDING_ADMIN_REVIEW': return { label: 'With admin', tone: 'warn' };
+    case 'PENDING_AI_REVIEW': return { label: 'With AI review', tone: 'warn' };
     case 'RESOLVED': return { label: 'Resolved', tone: 'success' };
     case 'CLOSED': return { label: 'Closed', tone: 'success' };
     default: return { label: titleCase(status), tone: 'neutral' };

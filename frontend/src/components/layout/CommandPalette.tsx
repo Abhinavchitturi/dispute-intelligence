@@ -33,7 +33,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       key: d.id, label: d.id, hint: `${reasonLabel(d.reason)} · ${d.buyer_reference ?? 'Buyer'} · ${money(d.amount, d.currency)}`,
       icon: <FileText className="h-4 w-4" />, to: `/investigate/${d.id}`,
     }));
-    return [...cases, ...pages];
+    // The list above stops at six, so offer the full list for anything typed.
+    const all = q.trim() ? [{ key: '__all', label: `See ${role === 'manager' ? 'every' : 'all your'} case${role === 'manager' ? '' : 's'} matching “${q.trim()}”`, hint: role === 'manager' ? 'Opens All Disputes with this search' : 'Opens Your cases with this search', icon: <Search className="h-4 w-4" />, to: `/queue?q=${encodeURIComponent(q.trim())}` }] : [];
+    return [...cases, ...all, ...pages];
   }, [q, disputes, role]);
 
   useEffect(() => setActive(0), [items.length]);

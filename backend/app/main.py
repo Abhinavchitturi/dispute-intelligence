@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,15 +18,45 @@ from backend.app.api.routes_patterns import router as patterns_router
 from backend.app.api.routes_audit import router as audit_router
 from backend.app.api.routes_integrations import router as integrations_router
 from backend.app.api.routes_messages import router as messages_router
+from backend.app.api.routes_auth import router as auth_router
+from backend.app.api.routes_oversight import router as oversight_router
+from backend.app.api.routes_users import router as users_router
+from backend.app.api.routes_assignment import router as assignment_router
+from backend.app.services.accounts import ensure_users
+from backend.app.services.strike_service import StrikeService
+from backend.app.services import case_clock
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("resolveiq")
+
+
+async def _reminder_loop():
+    """Every minute: re-ping managers about unsorted alerts, re-score open cases against the clock, and hand overdue unassigned cases to the AI Agent."""
+    while True:
+        await asyncio.sleep(60)
+        db = SessionLocal()
+        try:
+            n = StrikeService.remind_due(db)
+            if n:
+                logger.info("Sent %s manager reminder(s).", n)
+            moved = case_clock.tick(db)
+            if moved["handed_to_ai"]:
+                logger.info("Handed %s unassigned case(s) to the AI Agent.", moved["handed_to_ai"])
+        except Exception:  # a failed reminder must not stop the next one
+            logger.exception("Reminder check failed")
+        finally:
+            db.close()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Ensure database schema exists
     Base.metadata.create_all(bind=engine)
     ensure_columns()
+    db = SessionLocal()
+    try:
+        ensure_users(db)
+    finally:
+        db.close()
     
     # Auto-seed if database is empty
     db = SessionLocal()
@@ -40,7 +71,9 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
+    reminders = asyncio.create_task(_reminder_loop())
     yield
+    reminders.cancel()
 
 app = FastAPI(
     title="ResolveIQ — AI-Powered PayPal Dispute Intelligence",
@@ -86,6 +119,10 @@ app.include_router(patterns_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(integrations_router, prefix="/api")
 app.include_router(messages_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(oversight_router, prefix="/api")
+app.include_router(users_router, prefix="/api")
+app.include_router(assignment_router, prefix="/api")
 
 if __name__ == "__main__":
     import uvicorn

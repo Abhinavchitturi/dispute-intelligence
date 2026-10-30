@@ -50,7 +50,7 @@ function setup(route = '/investigate/D-1', opts: { timeline?: any[]; messages?: 
         notes: body.action_type.startsWith('REQUEST') ? ['The reply is due soon.'] : ['This one notice goes to both the seller and the buyer.'] });
     }
     if (url.endsWith('/evidence-summary')) return ok(SUMMARY);
-    if (url.endsWith('/decision')) return ok({ success: true, status: 'PENDING_ADMIN_REVIEW', message: 'Sent to an admin for review. Nobody has been told yet.' });
+    if (url.endsWith('/decision')) return ok({ success: true, status: 'PENDING_AI_REVIEW', message: 'Sent for AI review. Nobody has been told yet.' });
     if (url.endsWith('/actions/preview')) return ok({ dispute_id: 'D-1', action_type: body.action_type, is_supported: true, requires_confirmation: true, impact_summary: 'Impact text', warning_message: null, target_environment: 'demo', api_endpoint: null });
     if (url.endsWith('/actions/execute')) {
       if (opts.failBuyer && body.action_type === 'REQUEST_BUYER_EVIDENCE') {
@@ -322,10 +322,10 @@ describe('Case page: take-action popup', () => {
 
     await waitFor(() => expect(calls.some((c) => c.url.endsWith('/decision'))).toBe(true));
     const sent = calls.find((c) => c.url.endsWith('/decision'))!;
-    expect(sent.body).toMatchObject({ outcome: 'SELLER_FAVOR', reason: 'The carrier delivered to the confirmed address.', confirmed: true, actor: 'Abhinav Chitturi' });
+    expect(sent.body).toMatchObject({ outcome: 'SELLER_FAVOR', reason: 'The carrier delivered to the confirmed address.', confirmed: true });
     expect(calls.some((c) => c.url.endsWith('/actions/execute'))).toBe(false); // nobody is told yet
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(screen.getByRole('status')).toHaveTextContent('Sent to an admin for review. Nobody has been told yet.');
+    expect(screen.getByRole('status')).toHaveTextContent('Sent for AI review. Nobody has been told yet.');
   });
 
   it('before you decide, shows what points toward each side, says it is not a verdict, and shows nothing like it when asking for evidence', async () => {

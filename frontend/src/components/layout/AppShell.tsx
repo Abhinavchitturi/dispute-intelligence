@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { PanelLeftClose, PanelLeftOpen, Search, ShieldCheck } from 'lucide-react';
-import { fetchHealth, fetchMessageThreads } from '../../api/client';
+import { LogOut, PanelLeftClose, PanelLeftOpen, Search, ShieldCheck } from 'lucide-react';
+import { fetchHealth, fetchMe, fetchMessageThreads } from '../../api/client';
 import { cn } from '../../lib/format';
 import { useStoredState } from '../../lib/hooks';
 import { CommandPalette } from './CommandPalette';
 import { PAGES, visibleTo } from './pages';
 import { initials, useCurrentUser } from '../../lib/user';
 import { Badge } from '../ui/kit';
+import { AlertsBanner } from './AlertsBanner';
+import { NotificationBell } from './NotificationBell';
+import { clearSession, updateSessionUser } from '../../lib/auth';
 
 const GROUPS: { id: string; label: string }[] = [
   { id: 'main', label: 'Workspace' },
@@ -20,7 +23,7 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useStoredState('resolveiq.sidebar.collapsed', false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const location = useLocation();
-  const { role, setRole, user } = useCurrentUser();
+  const { role, user } = useCurrentUser();
 
   const { data: health, isError } = useQuery({
     queryKey: ['health'],
@@ -29,6 +32,10 @@ export function AppShell() {
     retry: 0,
   });
   const online = !!health && !isError;
+
+  // Keep the strike count and blocked flag fresh, since the AI reviewer can change them at any time.
+  const me = useQuery({ queryKey: ['me', user.id], queryFn: fetchMe, refetchInterval: 30_000, retry: 0, enabled: import.meta.env.MODE !== 'test' });
+  useEffect(() => { if (me.data) updateSessionUser(me.data); }, [me.data]);
 
   // Badge on Messages: conversations with a new reply, or where it's now your turn.
   const { data: threads } = useQuery({ queryKey: ['messageThreads'], queryFn: fetchMessageThreads, refetchInterval: 10_000, retry: 0 });
@@ -74,7 +81,7 @@ export function AppShell() {
                     // "Your cases" and "Disputes" are the same page with a different filter, so tell them apart by the filter.
                     const [path, query] = p.to.split('?');
                     const onQuery = location.pathname === path && !!query && location.search.includes(query);
-                    const active = query ? onQuery : (isActive && !(p.to === '/queue' && location.search.includes('view=mine'))) || (p.to === '/investigate' && isCase);
+                    const active = query ? onQuery : (isActive && !(p.to === '/queue' && /view=(mine|high)/.test(location.search))) || (p.to === '/investigate' && isCase);
                     return cn(
                       'group relative flex items-center gap-3 rounded-[10px] py-2.5 text-[15px] font-medium transition',
                       collapsed ? 'justify-center px-0' : 'px-3',
@@ -121,28 +128,21 @@ export function AppShell() {
           </button>
 
           <div className="ml-auto flex items-center gap-3">
-            <div role="group" aria-label="Signed in as" className="flex rounded-full bg-raised/80 p-0.5 text-xs font-medium">
-              {(['investigator', 'admin'] as const).map((r) => (
-                <button
-                  key={r} aria-pressed={role === r} onClick={() => setRole(r)}
-                  className={cn('rounded-full px-3 py-1 transition', role === r ? 'bg-[#636366] text-white shadow-[0_1px_3px_rgba(0,0,0,.4)]' : 'text-slate-300 hover:text-white')}
-                >
-                  {r === 'admin' ? 'Admin' : 'Investigator'}
-                </button>
-              ))}
-            </div>
             <Badge tone="violet">Demo data</Badge>
             <Badge tone={online ? 'success' : 'danger'} dot>{online ? 'Live' : 'Offline'}</Badge>
-            <div className="hidden items-center gap-3 border-l border-line pl-4 sm:flex">
+            <NotificationBell />
+            <div className="flex items-center gap-3 border-l border-line pl-4">
               <div className="grid h-8 w-8 place-items-center rounded-full bg-brand/20 text-xs font-semibold text-brand-soft">{initials(user.name)}</div>
-              <div className="leading-tight">
+              <div className="hidden leading-tight sm:block">
                 <div className="text-[13px] font-medium text-white">{user.name}</div>
-                <div className="text-xs text-muted">{user.role}</div>
+                <div className="text-xs text-muted">{user.roleLabel}</div>
               </div>
+              <button onClick={clearSession} aria-label="Sign out" title="Sign out" className="grid h-9 w-9 place-items-center rounded-full text-slate-300 transition hover:bg-white/[.08] hover:text-white"><LogOut className="h-[18px] w-[18px]" /></button>
             </div>
           </div>
         </header>
 
+        <AlertsBanner />
         <main className="flex-1 overflow-y-auto">
           <div key={location.pathname} className="mx-auto max-w-[1280px] animate-fade-in space-y-6 p-6 lg:p-8">
             <Outlet />

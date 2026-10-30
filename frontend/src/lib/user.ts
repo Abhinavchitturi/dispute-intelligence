@@ -1,19 +1,19 @@
-import { useStoredRole } from './hooks';
-import { Role } from '../types';
+import { useSession } from './auth';
+import { Role, SessionUser } from '../types';
 
-// Signed-in people shown in the header and greeting. There is no sign-in yet, so the role is a switch in the header
-// and the server trusts it. Edit these to change who you are.
-export const INVESTIGATOR = { name: 'Abhinav Chitturi', role: 'Dispute investigator' };
-export const ADMIN = { name: 'Priya Raman', role: 'Dispute operations admin' };
+// Who the pages show when nobody is signed in. Only tests render a page without signing in, so this keeps them simple.
+const TEST_USER: SessionUser = { id: 'USR-test', username: 'investigator', name: 'Abhinav Chitturi', role: 'INVESTIGATOR', email: null, is_blocked: false, blocked_reason: null, strikes: 0, block_at: 10, notify_at: 3 };
 
-/** The person using the app right now, from the role switch. */
+export const ROLE_LABEL: Record<SessionUser['role'], string> = { INVESTIGATOR: 'Dispute investigator', MANAGER: 'Dispute manager' };
+
+/** The person signed in right now, and what they are allowed to do. */
 export function useCurrentUser() {
-  const [role, setRole] = useStoredRole();
-  return { role, setRole, isAdmin: role === 'admin', user: role === 'admin' ? ADMIN : INVESTIGATOR };
+  const session = useSession();
+  const raw = session?.user ?? (import.meta.env.MODE === 'test' ? TEST_USER : null);
+  const user = raw ?? TEST_USER;
+  const role: Role = user.role === 'MANAGER' ? 'manager' : 'investigator';
+  return { user: { ...user, roleLabel: ROLE_LABEL[user.role] }, role, isManager: role === 'manager', signedIn: !!raw };
 }
-
-// Kept for code that only needs the default investigator (greeting, tests).
-export const CURRENT_USER = INVESTIGATOR;
 
 export const firstName = (name: string) => name.split(' ')[0];
 export const initials = (name: string) => name.split(' ').filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');

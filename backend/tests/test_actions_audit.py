@@ -47,10 +47,16 @@ def test_demo_action_execution_flow():
     assert any(e["action"] == "REQUEST_SELLER_EVIDENCE" and "Proof of delivery signature" in e["result_summary"] for e in events)
 
 
+def test_a_decision_cannot_skip_review():
+    r = client.post("/api/disputes/DEMO-DSP-1048/actions/execute", json={"action_type": "DECIDE_FOR_SELLER", "confirmed": True, "message": "Decided."})
+    assert r.status_code == 400 and "review" in r.json()["detail"].lower()
+    assert client.get("/api/disputes/DEMO-DSP-1048").json()["status"] != "RESOLVED"
+
+
 def test_a_decided_dispute_accepts_no_further_action():
-    first = client.post("/api/disputes/DEMO-DSP-1053/actions/execute", json={"action_type": "DECIDE_FOR_SELLER", "confirmed": True, "message": "Decided."})
-    assert first.status_code == 200
-    again = client.post("/api/disputes/DEMO-DSP-1053/actions/execute", json={"action_type": "DECIDE_FOR_BUYER", "confirmed": True, "message": "Changed my mind."})
+    from backend.tests.helpers import decide
+    decide(client, "DEMO-DSP-1053", "SELLER_FAVOR")
+    again = client.post("/api/disputes/DEMO-DSP-1053/actions/execute", json={"action_type": "REQUEST_BUYER_EVIDENCE", "confirmed": True, "requested_evidence": ["BUYER_STATEMENT"]})
     assert again.status_code == 400 and "already resolved" in again.json()["detail"]
     preview = client.post("/api/disputes/DEMO-DSP-1053/actions/preview", json={"action_type": "DECIDE_FOR_BUYER"}).json()
     assert preview["is_supported"] is False

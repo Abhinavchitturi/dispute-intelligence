@@ -97,6 +97,16 @@ class DisputeListItem(BaseModel):
     reviewed_by: Optional[str] = None
     seller_settled_at: Optional[datetime] = None
     buyer_settled_at: Optional[datetime] = None
+    decided_by: Optional[str] = None          # INVESTIGATOR (the AI agreed), AI (it overturned) or MANAGER
+    ai_verdict: Optional[str] = None
+    ai_rationale: Optional[str] = None
+    manager_assigned: Optional[str] = None
+    parent_dispute_id: Optional[str] = None   # set on an appeal
+    appeal_number: Optional[int] = None
+    collaborators: List[str] = []             # other investigators this case has been shared with
+    ai_owned: bool = False                    # nobody took it before its deadline, so the AI Agent has the whole case
+    ai_owned_at: Optional[datetime] = None
+    is_high_profile: bool = False             # the amount is at or above the high-profile threshold: the manager takes these
 
     class Config:
         from_attributes = True

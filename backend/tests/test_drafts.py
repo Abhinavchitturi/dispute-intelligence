@@ -217,8 +217,8 @@ def test_a_single_piece_of_evidence_on_file_is_enough_to_decide_on():
         assert set(d["cited_record_ids"]) <= _valid_ids(did)
 
     # And it can actually be sent: deciding needs no request to either party first.
-    r = client.post(f"/api/disputes/{did}/actions/execute", json={"action_type": "DECIDE_FOR_SELLER", "confirmed": True, "message": "Decided on the document on file."})
-    assert r.status_code == 200 and r.json()["details"]["outcome"] == "SELLER_FAVOR"
+    from backend.tests.helpers import decide
+    assert decide(client, did, "SELLER_FAVOR")["outcome"] == "SELLER_FAVOR"
 
 
 def test_unknown_action_and_dispute_are_rejected():

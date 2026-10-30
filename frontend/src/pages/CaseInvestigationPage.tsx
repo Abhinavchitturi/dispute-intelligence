@@ -3,9 +3,9 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, ArrowLeft, ArrowUpRight, Building2, CheckCircle2, ChevronDown, ChevronRight, CreditCard, FileText, Gavel, History,
-  HandHelping, Handshake, Lightbulb, MessageSquare, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
+  Handshake, Lightbulb, MessageSquare, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
 } from 'lucide-react';
-import { assignDispute, fetchDisputeDetail, fetchDisputeMessages, fetchDisputeTimeline, fetchInvestigationBrief, fetchSimilarCasesForDispute } from '../api/client';
+import { fetchCaseEmails, fetchDisputeDetail, fetchDisputeMessages, fetchDisputeTimeline, fetchInvestigationBrief, fetchSimilarCasesForDispute } from '../api/client';
 import { ActionWizard, ActionResult } from '../components/ActionWizard';
 import { MessageThread } from '../components/MessageThread';
 import { TimelineEvent } from '../types';
@@ -18,11 +18,14 @@ import { Countdown, ScoreRing } from '../components/DisputeBits';
 import { InvestigationProgress } from '../components/InvestigationProgress';
 import { ClaimPoints } from '../components/ClaimPoints';
 import { EvidenceChecklist } from '../components/EvidenceChecklist';
-import { AdminReviewPanel } from '../components/AdminReviewPanel';
+import { ManagerReviewPanel, ReviseDecision } from '../components/ManagerPanels';
+import { OversightCards } from '../components/OversightCards';
+import { AssignSelect } from '../components/AssignSelect';
+import { CollaboratorsPanel } from '../components/CollaboratorsPanel';
 import { useCurrentUser } from '../lib/user';
 import { cn, evidenceLabel, evidenceMeta, fileSize, isClosed, money, outcomeMeta, outcomeText, parseServerDate, pastOutcomeLabel, prettifyCodes, reasonLabel, sentenceCase, titleCase } from '../lib/format';
 
-type Tab = 'summary' | 'evidence' | 'timeline' | 'messages' | 'similar';
+type Tab = 'summary' | 'evidence' | 'timeline' | 'messages' | 'emails' | 'similar';
 
 const TIMELINE_ICON: Record<string, React.ElementType> = {
   PAYMENT: CreditCard, ORDER: FileText, SHIPMENT: Truck, DISPUTE: AlertTriangle, EVIDENCE: FileText, INVESTIGATOR_ACTION: User,
@@ -46,7 +49,7 @@ export function CaseInvestigationPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useToast();
-  const { user, isAdmin } = useCurrentUser();
+  const { user, isManager } = useCurrentUser();
 
   const [tab, setTab] = useState<Tab>('summary');
   const [highlighted, setHighlighted] = useState<string | null>(null);
@@ -61,20 +64,12 @@ export function CaseInvestigationPage() {
   const timeline = useQuery({ queryKey: ['disputeTimeline', disputeId], queryFn: () => fetchDisputeTimeline(disputeId) });
   const brief = useQuery({ queryKey: ['investigationBrief', disputeId], queryFn: () => fetchInvestigationBrief(disputeId, false) });
   const messages = useQuery({ queryKey: ['disputeMessages', disputeId], queryFn: () => fetchDisputeMessages(disputeId), refetchInterval: 30_000 });
+  const emails = useQuery({ queryKey: ['caseEmails', disputeId], queryFn: () => fetchCaseEmails(disputeId), retry: 0 });
   const similar = useQuery({ queryKey: ['similarCases', disputeId], queryFn: () => fetchSimilarCasesForDispute(disputeId) });
 
   const regenerate = useMutation({
     mutationFn: () => fetchInvestigationBrief(disputeId, true),
     onSuccess: (b) => { queryClient.setQueryData(['investigationBrief', disputeId], b); toast('success', 'Summary refreshed.'); },
-    onError: (e: Error) => toast('error', e.message),
-  });
-
-  const take = useMutation({
-    mutationFn: (assignee: string | null) => assignDispute(disputeId, assignee),
-    onSuccess: (r) => {
-      ['disputeDetail', 'disputes', 'urgentDisputes', 'dashboardSummary', 'auditEvents'].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
-      toast('success', r.assigned_to ? 'This case is now yours.' : 'Case released back to the queue.');
-    },
     onError: (e: Error) => toast('error', e.message),
   });
 
@@ -99,7 +94,7 @@ export function CaseInvestigationPage() {
   }
   const d = dispute.data;
   const decided = isClosed(d.status);
-  const withAdmin = d.status === 'PENDING_ADMIN_REVIEW';
+  const withAdmin = d.status === 'PENDING_AI_REVIEW';
   const judged = d.outcome === 'BUYER_FAVOR' || d.outcome === 'SELLER_FAVOR';
   const oneSideSettled = !decided && !!d.seller_settled_at !== !!d.buyer_settled_at;
   const mine = d.assigned_to === user.name;
@@ -120,6 +115,7 @@ export function CaseInvestigationPage() {
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="font-mono text-2xl font-semibold text-white">{d.id}</h1>
               <StatusBadge status={d.status} />
+              {d.is_high_profile && <Badge tone="warn">High profile</Badge>}
               <OutcomeBadge outcome={d.outcome} />
             </div>
             <p className="text-[15px] text-slate-200">{reasonLabel(d.reason)}</p>
@@ -130,14 +126,11 @@ export function CaseInvestigationPage() {
               {!decided && (
                 <span className="flex items-center gap-1.5">
                   {d.assigned_to ? <>Owner: {mine ? 'you' : d.assigned_to}</> : 'Unassigned'}
-                  {!isAdmin && (!d.assigned_to || mine) && (
-                    <button onClick={() => take.mutate(mine ? null : user.name)} disabled={take.isPending} className="ml-1 inline-flex items-center gap-1 text-brand-soft hover:underline">
-                      <HandHelping className="h-3.5 w-3.5" />{mine ? 'Release' : 'Take this case'}
-                    </button>
-                  )}
+                  {isManager && <AssignSelect disputeId={d.id} assignedTo={d.assigned_to} label="Assign this case" />}
                 </span>
               )}
             </div>
+            {!d.ai_owned && <CollaboratorsPanel dispute={d} />}
           </div>
           <div className="flex items-center gap-8">
             <div>
@@ -158,9 +151,9 @@ export function CaseInvestigationPage() {
             {decided
               ? <span className="rounded-xl border border-line bg-raised/50 px-4 py-2.5 text-sm text-muted">Decided. No further action.</span>
               : withAdmin
-                ? <span className="rounded-xl border border-amber-400/25 bg-amber-400/[.07] px-4 py-2.5 text-sm text-amber-100">With an admin to confirm</span>
-                : isAdmin
-                  ? <span className="rounded-xl border border-line bg-raised/50 px-4 py-2.5 text-sm text-muted">Investigators act on this case</span>
+                ? <span className="rounded-xl border border-amber-400/25 bg-amber-400/[.07] px-4 py-2.5 text-sm text-amber-100">With the AI reviewer</span>
+                : d.ai_owned && !isManager
+                  ? <span className="rounded-xl border border-line bg-raised/50 px-4 py-2.5 text-sm text-muted">With the AI Agent</span>
                   : <Button variant="primary" onClick={startAction}><Send className="h-4 w-4" />Take action</Button>}
           </div>
         </div>
@@ -180,16 +173,18 @@ export function CaseInvestigationPage() {
         </div>
       )}
 
-      {!decided && !withAdmin && d.review_note && d.status === 'UNDER_REVIEW' && !isAdmin && (
+      {!decided && !withAdmin && d.review_note && d.status === 'UNDER_REVIEW' && !isManager && (
         <div role="note" className="rounded-2xl border border-amber-400/25 bg-amber-400/[.07] p-4 text-sm text-amber-100">
           <span className="font-medium">{d.reviewed_by ?? 'An admin'} sent this case back:</span> {d.review_note}
         </div>
       )}
 
-      {withAdmin && isAdmin && (
+      <OversightCards dispute={d} />
+
+      {withAdmin && isManager && (
         <Card className="p-6">
-          <SectionTitle title="Review this decision" hint="Confirm it, decide differently, or send it back with a note" />
-          <AdminReviewPanel dispute={d} showEvidence={false} />
+          <SectionTitle title="Step in on this decision" hint="The AI reviewer hasn't ruled yet. Confirm it, decide differently, or send it back with a note" />
+          <ManagerReviewPanel dispute={d} showEvidence={false} />
         </Card>
       )}
 
@@ -219,6 +214,7 @@ export function CaseInvestigationPage() {
               { value: 'evidence', label: 'Evidence', count: d.evidence_items.length },
               { value: 'timeline', label: 'Timeline', count: timeline.data?.length ?? 0 },
               { value: 'messages', label: 'Messages', count: messages.data?.length ?? 0 },
+              { value: 'emails', label: 'Emails', count: emails.data?.length ?? 0 },
               { value: 'similar', label: 'Similar cases', count: similar.data?.length ?? 0 },
             ]}
           />
@@ -241,6 +237,7 @@ export function CaseInvestigationPage() {
                           {d.outcome === 'SETTLED' && <p className="mt-1 text-sm text-muted">The seller and the buyer both confirmed they settled it outside PayPal. No decision was made.</p>}
                           {d.outcome === 'DISMISSED' && <p className="mt-1 text-sm text-muted">The buyer withdrew the claim. No refund was issued and no decision was made.</p>}
                           {judged && d.proposed_reason && <p className="mt-1 text-sm text-slate-300"><span className="text-muted">Reason: </span>{d.proposed_reason}</p>}
+                          {isManager && judged && <div className="mt-3"><ReviseDecision dispute={d} /></div>}
                           <p className="mt-1 text-sm text-muted">There's nothing left to do on this case. To take action, open a case that's New, waiting on replies, or ready to decide from All disputes.</p>
                         </div>
                       </div>
@@ -256,7 +253,7 @@ export function CaseInvestigationPage() {
                           <Button size="sm" variant="ghost" loading={regenerate.isPending} onClick={() => regenerate.mutate()}>
                             {!regenerate.isPending && <RefreshCw className="h-3.5 w-3.5" />} Refresh
                           </Button>
-                          {!decided && !withAdmin && !isAdmin && <Button size="sm" variant="primary" onClick={startAction}>Take action</Button>}
+                          {!decided && !withAdmin && (isManager || !d.ai_owned) && <Button size="sm" variant="primary" onClick={startAction}>Take action</Button>}
                         </div>
                       }
                     />
@@ -436,6 +433,29 @@ export function CaseInvestigationPage() {
                     );
                   })}
                 </ol>
+              )}
+            </Card>
+          )}
+
+          {tab === 'emails' && (
+            <Card className="p-6 animate-fade-in">
+              <SectionTitle title="Emails" hint="What was sent to the seller and the buyer, and what came back" />
+              {!emails.data?.length ? <EmptyState title="No emails yet" hint="When the case is decided, the seller and the buyer each get an email listing the proof both sides sent." /> : (
+                <ul className="space-y-3" aria-label="Emails">
+                  {emails.data.map((e) => (
+                    <li key={e.id} className="rounded-xl border border-line bg-raised/40 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+                        <span>{e.direction === 'OUT' ? `To ${e.to}` : `From ${e.from}`}</span>
+                        <span className="flex items-center gap-2">
+                          <Badge tone={e.direction === 'IN' ? 'info' : e.status === 'SENT' ? 'success' : 'neutral'}>{e.direction === 'IN' ? 'Received' : e.status === 'SENT' ? 'Sent' : 'Kept here, not sent'}</Badge>
+                          {parseServerDate(e.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                        </span>
+                      </div>
+                      <h3 className="mt-2 text-sm font-semibold text-white">{e.subject}</h3>
+                      <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-300">{e.body}</p>
+                    </li>
+                  ))}
+                </ul>
               )}
             </Card>
           )}

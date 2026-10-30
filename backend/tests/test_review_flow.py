@@ -35,7 +35,7 @@ def _propose(did, outcome="SELLER_FAVOR", reason="The carrier delivered to the c
 
 
 def _review(did, action, **extra):
-    return client.post(f"/api/disputes/{did}/admin-review", json={"action": action, "reviewer": "Admin", "role": "ADMIN", **extra})
+    return client.post(f"/api/disputes/{did}/admin-review", json={"action": action, "reviewer": "PayPal", "role": "MANAGER", **extra})
 
 
 def _declare(did, party, kind):
@@ -49,11 +49,11 @@ def test_decision_needs_a_reason():
     assert _dispute("DEMO-DSP-1043")["status"] == "UNDER_REVIEW"
 
 
-def test_proposed_decision_waits_for_admin_and_tells_nobody():
+def test_proposed_decision_waits_for_review_and_tells_nobody():
     r = _propose("DEMO-DSP-1043", "BUYER_FAVOR", "Photos show damage and the seller sent nothing back.")
     assert r.status_code == 200
     d = _dispute("DEMO-DSP-1043")
-    assert d["status"] == "PENDING_ADMIN_REVIEW" and d["outcome"] is None
+    assert d["status"] == "PENDING_AI_REVIEW" and d["outcome"] is None
     assert d["proposed_outcome"] == "BUYER_FAVOR" and "damage" in d["proposed_reason"]
     assert not [m for m in client.get("/api/disputes/DEMO-DSP-1043/messages").json() if m["action_type"] == "DECIDE_FOR_BUYER"]
 
@@ -61,7 +61,7 @@ def test_proposed_decision_waits_for_admin_and_tells_nobody():
 def test_cannot_ask_for_more_while_waiting_for_admin():
     r = client.post("/api/disputes/DEMO-DSP-1043/actions/execute", json={
         "action_type": ASK_BUYER, "confirmed": True, "message": "x", "requested_evidence": ["BUYER_STATEMENT"]})
-    assert r.status_code == 400 and "admin" in r.json()["detail"].lower()
+    assert r.status_code == 400 and "ai reviewer" in r.json()["detail"].lower()
 
 
 def test_only_an_admin_can_review():
@@ -73,7 +73,7 @@ def test_admin_approves_and_both_sides_are_told():
     r = _review("DEMO-DSP-1043", "APPROVE")
     assert r.status_code == 200, r.text
     d = _dispute("DEMO-DSP-1043")
-    assert d["status"] == "RESOLVED" and d["outcome"] == "BUYER_FAVOR" and d["reviewed_by"] == "Admin"
+    assert d["status"] == "RESOLVED" and d["outcome"] == "BUYER_FAVOR" and d["reviewed_by"] == "PayPal"
     sent = [m for m in client.get("/api/disputes/DEMO-DSP-1043/messages").json() if m["action_type"] == "DECIDE_FOR_BUYER"]
     assert {m["counterparty"] for m in sent} == {"SELLER", "BUYER"}
     assert "Photos show damage" in sent[0]["body"]  # the investigator's reason travels with the notice

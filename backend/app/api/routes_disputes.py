@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timedelta
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from backend.app.services.auth_service import case_scope, case_user
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, asc, or_
 
@@ -20,68 +21,88 @@ from backend.app.schemas.dispute import (
 )
 from backend.app.schemas.integrations import DashboardSummaryResponse
 from backend.app.services.similar_cases_service import SimilarCasesService
-from backend.app.services import claim_service, evidence_documents, evidence_summary
+from backend.app.services import case_clock, claim_service, evidence_documents, evidence_summary
+from backend.app.services.high_profile import high_profile_filter, is_high_profile
+from backend.app.services.access import collaborator_names, is_restricted, shared_with, visible_filter
+from backend.app.services.auth_service import current_user
+from backend.app.models.team import User
 from backend.app.services.message_service import MessageService, OPEN_STATUSES as OPEN_STATUS_LIST
 
 _PROPOSAL_FIELDS = (
     "assigned_to", "proposed_outcome", "proposed_reason", "proposed_by", "proposed_at",
     "review_note", "reviewed_by", "seller_settled_at", "buyer_settled_at",
+    "decided_by", "ai_verdict", "ai_rationale", "manager_assigned", "parent_dispute_id", "appeal_number", "ai_owned", "ai_owned_at",
 )
 
 
-def _proposal_data(d: Dispute) -> dict:
-    return {f: getattr(d, f) for f in _PROPOSAL_FIELDS}
+def _proposal_data(d: Dispute, collaborators: Optional[List[str]] = None) -> dict:
+    return {**{f: getattr(d, f) for f in _PROPOSAL_FIELDS}, "is_high_profile": is_high_profile(d), "collaborators": collaborators or []}
 
-router = APIRouter(tags=["Disputes"])
+router = APIRouter(tags=["Disputes"], dependencies=[Depends(case_user), Depends(case_scope)])
 
 @router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
-def get_dashboard_summary(assignee: Optional[str] = None, db: Session = Depends(get_db)):
+def get_dashboard_summary(assignee: Optional[str] = None, user: Optional[User] = Depends(current_user), db: Session = Depends(get_db)):
     """Aggregates real database metrics for the overview dashboard. Pass the signed-in investigator as `assignee` for their own count."""
     now = datetime.utcnow()
+    scope = visible_filter(db, user)   # an investigator's numbers are only about their own cases
+    Q = lambda *cols: (db.query(*cols) if cols else db.query(Dispute)).filter(scope) if scope is not None else (db.query(*cols) if cols else db.query(Dispute))
     MessageService.expire_overdue(db, now)  # a passed reply deadline makes the case Ready to decide
+    case_clock.tick_if_due(db)
 
     # 1. Open disputes: anything PayPal hasn't decided yet
     open_statuses = OPEN_STATUS_LIST
-    total_open = db.query(Dispute).filter(Dispute.status.in_(open_statuses)).count()
+    total_open = Q().filter(Dispute.status.in_(open_statuses)).count()
 
     # 2. Decision targets coming up (< 48 hrs) or already missed
-    approaching = db.query(Dispute).filter(
+    approaching = Q().filter(
         Dispute.status.in_(open_statuses),
         Dispute.response_due_date.isnot(None),
         Dispute.response_due_date <= (now + timedelta(hours=48))
     ).count()
 
     # 3. Missing or conflicting evidence
-    missing_evidence = db.query(Dispute).filter(
+    missing_evidence = Q().filter(
         Dispute.status.in_(open_statuses),
         Dispute.evidence_status.in_(["MISSING", "CONFLICTING"])
     ).count()
 
     # 4. Where each open case sits
-    awaiting_review = db.query(Dispute).filter(Dispute.status == "UNDER_REVIEW").count()
-    new_cases = db.query(Dispute).filter(Dispute.status == "OPEN").count()
-    waiting_on_parties = db.query(Dispute).filter(Dispute.status.in_(
+    awaiting_review = Q().filter(Dispute.status == "UNDER_REVIEW").count()
+    new_cases = Q().filter(Dispute.status == "OPEN").count()
+    waiting_on_parties = Q().filter(Dispute.status.in_(
         ["WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "WAITING_FOR_BOTH_RESPONSES"])).count()
 
-    mine = db.query(Dispute).filter(Dispute.status.in_(open_statuses), Dispute.assigned_to == assignee).count() if assignee else 0
-    pending_review = db.query(Dispute).filter(Dispute.status == "PENDING_ADMIN_REVIEW").count()
+    if is_restricted(user):
+        mine = Q().filter(Dispute.status.in_(open_statuses)).count()          # everything they can see is theirs
+    elif assignee:
+        who = db.query(User).filter(User.display_name == assignee).first()
+        mine = db.query(Dispute).filter(Dispute.status.in_(open_statuses), or_(Dispute.assigned_to == assignee, Dispute.id.in_(shared_with(db, who.id)) if who else False)).count()
+    else:
+        mine = 0
+    pending_review = Q().filter(Dispute.status == "PENDING_AI_REVIEW").count()
+    high_profile = Q().filter(Dispute.status.in_(open_statuses), high_profile_filter()).count()
+    ai_owned = Q().filter(Dispute.status.in_(open_statuses), Dispute.ai_owned.is_(True)).count()
+    unassigned = Q().filter(Dispute.status.in_(open_statuses), Dispute.assigned_to.is_(None)).count()
 
     # 5. Volume by Reason
     reason_counts = {}
-    for dsp in db.query(Dispute.reason).filter(Dispute.status.in_(open_statuses)).all():
+    for dsp in Q(Dispute.reason).filter(Dispute.status.in_(open_statuses)).all():
         r = dsp[0]
         reason_counts[r] = reason_counts.get(r, 0) + 1
     
     disputes_by_reason = [{"reason": k, "count": v} for k, v in reason_counts.items()]
 
     # 6. Priority Distribution
-    p_high = db.query(Dispute).filter(Dispute.status.in_(open_statuses), Dispute.priority_score >= 70).count()
-    p_med = db.query(Dispute).filter(Dispute.status.in_(open_statuses), Dispute.priority_score >= 40, Dispute.priority_score < 70).count()
-    p_low = db.query(Dispute).filter(Dispute.status.in_(open_statuses), Dispute.priority_score < 40).count()
+    p_high = Q().filter(Dispute.status.in_(open_statuses), Dispute.priority_score >= 70).count()
+    p_med = Q().filter(Dispute.status.in_(open_statuses), Dispute.priority_score >= 40, Dispute.priority_score < 70).count()
+    p_low = Q().filter(Dispute.status.in_(open_statuses), Dispute.priority_score < 40).count()
 
     # 7. Recent Activity (last 6 audit events)
+    audit_q = db.query(AuditEvent)
+    if scope is not None:
+        audit_q = audit_q.filter(AuditEvent.dispute_id.in_(db.query(Dispute.id).filter(scope)))
     recent_events = (
-        db.query(AuditEvent)
+        audit_q
         .order_by(AuditEvent.created_at.desc())
         .limit(6)
         .all()
@@ -100,9 +121,9 @@ def get_dashboard_summary(assignee: Optional[str] = None, db: Session = Depends(
     ]
 
     # 8. Action Outcomes
-    successful_actions = db.query(AuditEvent).filter(AuditEvent.status == "SUCCESS").count()
-    failed_actions = db.query(AuditEvent).filter(AuditEvent.status == "FAILED").count()
-    pending_actions = db.query(AuditEvent).filter(AuditEvent.status == "PENDING_APPROVAL").count()
+    successful_actions = audit_q.filter(AuditEvent.status == "SUCCESS").count()
+    failed_actions = audit_q.filter(AuditEvent.status == "FAILED").count()
+    pending_actions = audit_q.filter(AuditEvent.status == "PENDING_APPROVAL").count()
 
     return DashboardSummaryResponse(
         environment_mode=settings.RESOLVEIQ_MODE,
@@ -112,6 +133,9 @@ def get_dashboard_summary(assignee: Optional[str] = None, db: Session = Depends(
         awaiting_review_count=awaiting_review,
         new_cases_count=new_cases,
         waiting_on_parties_count=waiting_on_parties,
+        ai_owned_count=ai_owned,
+        unassigned_count=unassigned,
+        high_profile_count=high_profile,
         my_cases_count=mine,
         pending_admin_review_count=pending_review,
         disputes_by_reason=disputes_by_reason,
@@ -129,18 +153,29 @@ def list_disputes(
     evidence_status: Optional[str] = None,
     priority_level: Optional[str] = None,  # high, medium, low
     assigned_to: Optional[str] = None,
+    high_profile: bool = False,
+    unassigned: bool = False,
     sort_by: str = "priority_score",
     sort_order: str = "desc",
     skip: int = 0,
     limit: int = 50,
+    user: Optional[User] = Depends(current_user),
     db: Session = Depends(get_db)
 ):
-    """Lists disputes with multi-attribute filtering, search, sorting, and pagination."""
+    """Lists disputes with multi-attribute filtering, search, sorting, and pagination. An investigator only ever gets their own cases."""
     MessageService.expire_overdue(db)
+    case_clock.tick_if_due(db)
     query = db.query(Dispute)
+    scope = visible_filter(db, user)
+    if scope is not None:
+        query = query.filter(scope)
 
     if assigned_to:
         query = query.filter(Dispute.assigned_to == assigned_to)
+    if high_profile:
+        query = query.filter(high_profile_filter())
+    if unassigned:
+        query = query.filter(Dispute.assigned_to.is_(None))
 
     if search:
         search_term = f"%{search.strip()}%"
@@ -183,6 +218,7 @@ def list_disputes(
         query = query.order_by(desc(sort_col))
 
     disputes = query.offset(skip).limit(limit).all()
+    shared = collaborator_names(db, [d.id for d in disputes])
     results: List[DisputeListItem] = []
 
     for d in disputes:
@@ -214,7 +250,7 @@ def list_disputes(
             evidence_status=d.evidence_status,
             buyer_claim=d.buyer_claim,
             outcome=d.outcome,
-            **_proposal_data(d),
+            **_proposal_data(d, shared.get(d.id)),
         )
         results.append(item)
 
@@ -223,6 +259,7 @@ def list_disputes(
 @router.get("/disputes/{dispute_id}", response_model=DisputeDetail)
 def get_dispute_detail(dispute_id: str, db: Session = Depends(get_db)):
     """Retrieves single dispute with complete transaction, order, shipment, and evidence context."""
+    case_clock.tick_if_due(db)
     dispute = db.query(Dispute).filter(Dispute.id == dispute_id).first()
     if not dispute:
         raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
@@ -257,7 +294,7 @@ def get_dispute_detail(dispute_id: str, db: Session = Depends(get_db)):
         evidence_status=dispute.evidence_status,
         buyer_claim=dispute.buyer_claim,
         outcome=dispute.outcome,
-        **_proposal_data(dispute),
+        **_proposal_data(dispute, collaborator_names(db, [dispute.id]).get(dispute.id)),
         transaction=dispute.transaction,
         order=dispute.order,
         evidence_items=dispute.evidence_items,

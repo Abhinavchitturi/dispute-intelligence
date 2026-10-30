@@ -36,6 +36,22 @@ class DisputeMessage(Base):
             return {}
 
     @property
+    def emailed_to(self) -> Optional[str]:        # outbound request: the address we emailed
+        return self._meta().get("emailed_to")
+
+    @property
+    def email_status(self) -> Optional[str]:      # QUEUED (kept here, not sent), SENT or FAILED
+        return self._meta().get("email_status")
+
+    @property
+    def needs_recording(self) -> bool:            # an emailed reply that nobody has gone through yet
+        return bool(self._meta().get("needs_recording"))
+
+    @property
+    def attachments(self) -> List[str]:           # names of the files that came with an emailed reply
+        return list(self._meta().get("attachments", []))
+
+    @property
     def requested_evidence(self) -> List[str]:    # outbound request: what PayPal asked for
         return list(self._meta().get("requested_evidence", []))
 

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from backend.app.services.auth_service import current_user, manager_user
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 
@@ -9,7 +10,7 @@ from backend.app.services.paypal_client import PayPalClient
 from backend.app.seed.seed_data import seed_database
 from backend.app.services.audit_service import AuditService
 
-router = APIRouter(tags=["Settings & Integrations"])
+router = APIRouter(tags=["Settings & Integrations"], dependencies=[Depends(current_user)])
 
 @router.get("/integrations/status", response_model=IntegrationStatusResponse)
 def get_integration_status():
@@ -86,7 +87,7 @@ async def test_ai_connectivity():
     )
 
 @router.post("/integrations/reset-demo-data")
-def reset_demo_data(db: Session = Depends(get_db)):
+def reset_demo_data(_manager=Depends(manager_user), db: Session = Depends(get_db)):
     """Resets database and re-seeds deterministic synthetic cases."""
     seed_database(db)
     AuditService.record_event(
@@ -95,6 +96,6 @@ def reset_demo_data(db: Session = Depends(get_db)):
         action="DEMO_DATA_RESET",
         status="SUCCESS",
         source="synthetic",
-        result_summary="Re-initialized synthetic dataset: 12 disputes, 20 historical cases, shipments, and evidence."
+        result_summary="Re-initialized synthetic dataset: 27 disputes, 20 historical cases, shipments, and evidence."
     )
     return {"status": "SUCCESS", "message": "Demo data reset successfully."}

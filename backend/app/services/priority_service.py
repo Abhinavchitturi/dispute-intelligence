@@ -1,5 +1,6 @@
 from typing import Tuple, List, Optional
 from datetime import datetime, timezone
+from backend.app.config import settings
 from backend.app.schemas.dispute import PriorityFactor
 
 def calculate_priority_score(
@@ -29,25 +30,16 @@ def calculate_priority_score(
             now = datetime.now(timezone.utc)
             
         diff_hours = (response_due_date - now).total_seconds() / 3600.0
+        # The score climbs steadily as the deadline closes in: 5 points when the case has just arrived, 35 when the time is up.
+        window = max(1.0, settings.CASE_WINDOW_DAYS * 24.0)
+        left = max(0.0, min(1.0, diff_hours / window))
+        points = round(5.0 + 30.0 * (1.0 - left), 1)
         if diff_hours <= 0:
-            # Overdue or expired
-            points = 35.0
-            explanation = "Response deadline has elapsed or is due immediately (critical action window)."
-        elif diff_hours <= 12:
-            points = 35.0
-            explanation = f"Critical response window: Only {diff_hours:.1f} hours remaining before default liability."
+            explanation = "The deadline has passed. The time to deal with this case is up."
         elif diff_hours <= 24:
-            points = 28.0
-            explanation = f"High urgency: {diff_hours:.1f} hours remaining before response deadline."
-        elif diff_hours <= 48:
-            points = 20.0
-            explanation = f"Moderate urgency: {diff_hours:.1f} hours remaining to submit evidence."
-        elif diff_hours <= 96:
-            points = 10.0
-            explanation = f"Standard urgency: {diff_hours/24:.1f} days remaining before deadline."
+            explanation = f"Less than a day left ({diff_hours:.1f} hours) before the deadline."
         else:
-            points = 5.0
-            explanation = f"Low deadline pressure: Response due in {diff_hours/24:.1f} days."
+            explanation = f"{diff_hours / 24:.1f} days left of the {settings.CASE_WINDOW_DAYS}-day window. The score rises every day it stays open."
     else:
         # Explicit rule from Section 9: Handle missing deadlines as unknown, not overdue!
         points = 8.0

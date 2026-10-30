@@ -60,11 +60,19 @@ describe('computeProgress (PayPal investigating a dispute)', () => {
     expect(p.next).toMatch(/seller and the buyer to reply/);
   });
 
-  it('is ready to decide once every request is answered', () => {
-    const p = computeProgress(dispute({ status: 'UNDER_REVIEW' }), [msg({ awaiting_reply: false }), reply()]);
+  it('is ready to decide only once BOTH the seller and the buyer have answered', () => {
+    const both = [msg({ awaiting_reply: false }), reply(), msg({ id: 'M2', counterparty: 'BUYER', action_type: 'REQUEST_BUYER_EVIDENCE', awaiting_reply: false }), reply({ id: 'R2', counterparty: 'BUYER', in_reply_to: 'M2' })];
+    const p = computeProgress(dispute({ status: 'UNDER_REVIEW' }), both);
     expect(p.steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'current']);
     expect(p.percent).toBe(75);
     expect(p.next).toMatch(/review the evidence and decide/i);
+  });
+
+  it('one side answering is not enough: the case is still in progress and waits for the other side to be asked', () => {
+    const p = computeProgress(dispute({ status: 'IN_PROGRESS' }), [msg({ awaiting_reply: false }), reply()]);
+    expect(p.steps.map((s) => s.state)).toEqual(['done', 'done', 'current', 'todo']);
+    expect(p.steps[2].detail).not.toBe('All replies in');
+    expect(p.percent).toBeLessThan(75);
   });
 
   it('a decided case is 100% and says which way it went', () => {

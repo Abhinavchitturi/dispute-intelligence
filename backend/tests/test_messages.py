@@ -61,6 +61,19 @@ def _evidence(did):
     return {e["evidence_type"]: e for e in client.get(f"/api/disputes/{did}/evidence").json()}
 
 
+def test_every_case_the_demo_starts_as_ready_to_decide_has_earned_it():
+    """Ready means both the seller and the buyer have answered. The demo data must not claim otherwise."""
+    ready = [d for d in client.get("/api/disputes", params={"limit": 200}).json() if d["status"] == "UNDER_REVIEW"]
+    assert ready
+    for d in ready:
+        msgs = _messages(d["id"])
+        asked = {m["counterparty"] for m in msgs if m["direction"] == "OUTBOUND" and m["action_type"] in ("REQUEST_SELLER_EVIDENCE", "REQUEST_BUYER_EVIDENCE")}
+        answered = {m["counterparty"] for m in msgs if m["direction"] == "INBOUND"}
+        # (A case that became ready during these tests did so through real replies, which is the same rule.)
+        assert {"SELLER", "BUYER"} <= asked and {"SELLER", "BUYER"} <= answered, f"{d['id']} says Ready to decide but nobody has answered both requests"
+        assert not any(m["awaiting_reply"] for m in msgs if m["direction"] == "OUTBOUND")
+
+
 def test_a_new_case_starts_open_with_nobody_asked():
     d = _dispute("DEMO-DSP-1042")
     assert d["status"] == "OPEN" and d["outcome"] is None
@@ -83,7 +96,7 @@ def test_requesting_evidence_from_the_seller_stores_the_message_and_makes_the_ca
     assert _dispute(did)["status"] == "WAITING_FOR_SELLER_RESPONSE"
 
 
-def test_the_seller_provides_what_they_can_and_the_case_moves_to_ready_to_decide():
+def test_the_seller_provides_what_they_can_and_the_case_is_in_progress():
     did = "DEMO-DSP-1046"  # continues the case above
     _set_address(did, "yes")
     (msg,) = [m for m in _messages(did) if m["direction"] == "OUTBOUND"]
@@ -97,8 +110,8 @@ def test_the_seller_provides_what_they_can_and_the_case_moves_to_ready_to_decide
     ev = _evidence(did)
     for t in (SIGNATURE, ADDRESS):
         assert ev[t]["availability_status"] == "AVAILABLE" and ev[t]["description"].startswith("Provided by seller:")
-    assert _dispute(did)["status"] == "UNDER_REVIEW"
-    assert _thread(did)["state"] == "YOUR_TURN" and _thread(did)["unread_count"] == 1
+    assert _dispute(did)["status"] == "IN_PROGRESS"                    # only the seller has answered, so it isn't ready to decide yet
+    assert _thread(did)["state"] == "IN_PROGRESS" and _thread(did)["unread_count"] == 1
     assert any(e["action"] == "REPLY_RECEIVED" and "seller" in e["result_summary"] for e in client.get(f"/api/audit-events?dispute_id={did}").json())
 
     assert client.post(f"/api/disputes/{did}/messages/read").json()["marked_read"] == 1
@@ -116,11 +129,11 @@ def test_the_seller_cannot_produce_a_signature_when_the_carrier_never_confirmed_
     ev = _evidence(did)
     assert SIGNATURE not in ev or ev[SIGNATURE]["availability_status"] != "AVAILABLE"  # nothing was invented
     assert ev[TRACKING]["availability_status"] == "AVAILABLE"  # what they could provide was recorded
-    assert _dispute(did)["status"] == "UNDER_REVIEW"  # still ready for PayPal to decide with what it has
+    assert _dispute(did)["status"] == "IN_PROGRESS"  # the seller answered, but the buyer hasn't been asked
 
 
 def test_the_buyer_supplies_footage_as_a_reference_and_nothing_is_stored_as_a_file():
-    did = "DEMO-DSP-1049"
+    did = "DEMO-DSP-1058"
     sent = _act(did, "REQUEST_BUYER_EVIDENCE", requested_evidence=[FOOTAGE, BUYER_ADDR])
     assert _dispute(did)["status"] == "WAITING_FOR_BUYER_RESPONSE"
     reply = _reply(sent["message_id"])
@@ -131,7 +144,7 @@ def test_the_buyer_supplies_footage_as_a_reference_and_nothing_is_stored_as_a_fi
     meta = json.loads(clip["metadata_json"])
     assert meta["provided_by"] == "BUYER" and meta["content_type"] == "video/mp4" and meta["file_name"].endswith(".mp4")
     assert "stored by PayPal" in meta["storage"]
-    assert _dispute(did)["status"] == "UNDER_REVIEW"
+    assert _dispute(did)["status"] == "IN_PROGRESS"
 
 
 def test_asking_both_sides_waits_on_both_until_each_has_answered():
@@ -156,16 +169,17 @@ def test_asking_both_sides_waits_on_both_until_each_has_answered():
 ])
 def test_a_decision_resolves_the_case_and_tells_both_parties(did, action, outcome, winner):
     _act(did, "REQUEST_SELLER_EVIDENCE", requested_evidence=[SIGNATURE])  # left unanswered on purpose
-    sent = _act(did, action, f"Decision notice for {did}")
-    assert sent["details"] == {"new_status": "RESOLVED", "outcome": outcome}
-    assert f"resolved in the {winner}'s favor" in sent["message"]
+    from backend.tests.helpers import decide
+    sent = decide(client, did, outcome)
+    assert sent["status"] == "RESOLVED" and sent["outcome"] == outcome
+    assert f"Resolved in the {winner}'s favor" in sent["message"]
 
     d = _dispute(did)
     assert d["status"] == "RESOLVED" and d["outcome"] == outcome
 
     notices = [m for m in _messages(did) if m["action_type"] == action]
     assert sorted(m["counterparty"] for m in notices) == ["BUYER", "SELLER"]  # one notice to each side
-    assert all(m["body"] == f"Decision notice for {did}" and not m["awaiting_reply"] for m in notices)
+    assert all(f"Resolved in the {winner}'s favor" in m["body"] and not m["awaiting_reply"] for m in notices)
 
     # The open request no longer waits for anything, and the thread shows the case as closed.
     assert not any(m["awaiting_reply"] for m in _messages(did))
@@ -182,7 +196,7 @@ def test_a_reply_shows_up_by_itself_once_the_wait_is_over(monkeypatch):
     _act(did, "REQUEST_BUYER_EVIDENCE", requested_evidence=[BUYER_ADDR])
     msgs = _messages(did)  # reading is what delivers anything that is due
     assert [(m["direction"], m["counterparty"]) for m in msgs] == [("OUTBOUND", "BUYER"), ("INBOUND", "BUYER")]
-    assert _dispute(did)["status"] == "UNDER_REVIEW"
+    assert _dispute(did)["status"] == "IN_PROGRESS"
 
 
 def test_the_wait_is_respected_before_the_reply_is_due(monkeypatch):
@@ -194,7 +208,7 @@ def test_the_wait_is_respected_before_the_reply_is_due(monkeypatch):
 
 
 def test_real_sandbox_messages_are_never_faked():
-    did = "DEMO-DSP-1043"
+    did = "DEMO-DSP-1059"
     db = SessionLocal()
     try:
         db.add(DisputeMessage(id="MSG-SANDBOX-1", dispute_id=did, direction="OUTBOUND", counterparty="SELLER", action_type="REQUEST_SELLER_EVIDENCE",
@@ -260,3 +274,49 @@ def test_demo_data_from_an_older_version_is_refreshed_exactly_once(tmp_path):
     finally:
         db.close()
         engine.dispose()
+
+
+def test_ready_to_decide_needs_both_sides_to_have_answered():
+    did = "DEMO-DSP-1054"
+    _set_address(did, "yes")
+    seller = _act(did, "REQUEST_SELLER_EVIDENCE", requested_evidence=[SIGNATURE])
+    _reply(seller["message_id"])
+    assert _dispute(did)["status"] == "IN_PROGRESS"                    # the buyer has not been asked, so we are not ready
+    assert _thread(did)["state"] == "IN_PROGRESS"
+    buyer = _act(did, "REQUEST_BUYER_EVIDENCE", requested_evidence=[FOOTAGE])
+    assert _dispute(did)["status"] == "WAITING_FOR_BUYER_RESPONSE"
+    _reply(buyer["message_id"])
+    assert _dispute(did)["status"] == "UNDER_REVIEW" and _thread(did)["state"] == "YOUR_TURN"      # both have answered
+    assert client.get("/api/dashboard/summary").json()["awaiting_review_count"] >= 1
+
+
+def test_when_time_is_up_the_case_is_ready_to_decide_even_if_only_one_side_answered():
+    from backend.app.database import SessionLocal
+    from backend.app.models.message import DisputeMessage
+    from backend.app.services.message_service import MessageService
+    did = "DEMO-DSP-1057"
+    _set_address(did, "yes")
+    seller = _act(did, "REQUEST_SELLER_EVIDENCE", requested_evidence=[SIGNATURE])
+    _reply(seller["message_id"])
+    assert _dispute(did)["status"] == "IN_PROGRESS"
+    buyer = _act(did, "REQUEST_BUYER_EVIDENCE", requested_evidence=[FOOTAGE])
+    db = SessionLocal()
+    try:
+        m = db.get(DisputeMessage, buyer["message_id"])
+        meta = m._meta()
+        meta["deadline"] = "2020-01-01T00:00:00"
+        m.meta_json = json.dumps(meta)
+        m.reply_due_at = None
+        db.commit()
+        MessageService.expire_overdue(db)
+    finally:
+        db.close()
+    assert _dispute(did)["status"] == "UNDER_REVIEW"                   # the buyer never answered, but the deadline has passed
+
+
+def test_seller_notice_is_short_and_buyer_notice_carries_the_appeal_paragraph():
+    from backend.app.services.message_service import short_notice
+    full = "Dispute D-1 · USD 10.00\n\nDECISION\nResolved in the seller's favor.\n\nWHAT WE REVIEWED\n- Carrier status: delivered\n\nREASON\n- Delivered.\n\nWHAT HAPPENS NEXT\n- No refund.\n\nREVIEW\n- Looks right."
+    short = short_notice(full)
+    assert "Resolved in the seller's favor." in short and "WHAT HAPPENS NEXT" in short and "REVIEW" in short
+    assert "WHAT WE REVIEWED" not in short and "REASON" not in short

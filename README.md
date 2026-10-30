@@ -241,7 +241,7 @@ cp .env.example .env
 # Install backend requirements
 python -m pip install -r backend/requirements.txt
 
-# Populate initial synthetic dataset (12 disputes, 20 historical precedents)
+# Populate initial synthetic dataset (27 disputes, 20 historical precedents)
 python -m backend.app.seed.seed_data
 ```
 
@@ -410,3 +410,37 @@ Payment dispute investigation is one of the highest-friction bottlenecks in mode
 4. Keeps the human analyst firmly in control with one-click sandbox action orchestration.
 
 *"Every claim. Every source. One clearer investigation."*
+
+---
+
+## Sign-in
+
+Everything sits behind a login. The demo accounts and their passwords are listed in [credentials.md](credentials.md). The accounts are created automatically the first time the backend starts.
+
+## How PayPal staff reach sellers and buyers
+
+Sellers and buyers don't use this app. It is for PayPal's own team. So everything that has to reach them goes out **by email**, and everything they send back comes in **by email**:
+
+- **Evidence requests** are emailed to the seller or buyer with the case number in the subject (for example `[DEMO-DSP-1042]`), what is needed, and how to reply.
+- **Their replies** go to the disputes mailbox. The mail provider forwards each one to `POST /api/inbound-mail` (header `X-Inbound-Secret`), and it lands on the case as an unread **Email reply**, with the names of its attachments.
+- **Someone at PayPal goes through it:** open the reply, tick which of the requested documents really came, and save. Only then does the evidence count and the case move on. Anything unticked is recorded as not sent.
+- **Decisions** are emailed to both sides, listing the proof by name, with the appeals address. A reply to a decided case opens an appeal.
+- **Mail server:** set `SMTP_HOST` (and the login) in `.env` to send for real. Without it, every email is kept and shown under the case's **Emails** tab as "Kept here, not sent", so nothing is lost.
+- **Demo:** each chat has **Simulate email reply**, which sends a reply through the same path.
+- **Alerts for the team** (strikes, requests, the AI Agent taking a case) stay inside the app, in the pinned banner and the bell.
+
+## Who does what
+
+1. **Investigator** works the cases the manager gives them, and can **share** a case with colleagues so several investigators work it together (the owner stays the owner; anyone on it can work it; the owner, the manager or the person themselves can take someone off), and decides with a reason. With no cases left, they can ask the manager for more, and the manager is alerted. The decision goes to the AI reviewer.
+2. **AI reviewer** (built separately, see [docs/ai-agent-contract.md](docs/ai-agent-contract.md)) approves or overturns. An overturn is a strike for the investigator.
+3. **Manager** (PayPal):
+   - takes the **high-profile cases** (any case for USD 1,000 or more; the threshold is the `HIGH_PROFILE_AMOUNT` setting. It goes by price only, since a priority score keeps changing) and decides them directly, with no AI review;
+   - **hands out cases**: assign one case from its row, or use **Distribute cases**: press plus or minus next to each person for how many cases they get, or press **Split evenly** to share them out (30 cases between three people is 10 each). The most urgent go out first. Investigators don't pick their own cases;
+   - sees **unassigned cases first**: every case has a 5-day window (`CASE_WINDOW_DAYS`) and its priority score climbs as the days run out, so the most urgent unowned cases lead the Overview. A case nobody takes by its deadline goes to the **AI Agent**, which handles the whole case, and the manager gets a pinned alert;
+   - is the **only one who sees every case**; investigators see just the cases they own, plus any a colleague has shared with them (anything else answers "not found", on every screen and API route);
+   - can view **every case** (Disputes page, or the search bar at the top) and step in on any of them;
+   - overturns anyone, including the AI. Corrections to the AI are saved as training feedback;
+   - gets an alert every 3 strikes, pinned on top and pinged hourly until marked **Sorted**; accounts are blocked at 10 strikes until the manager unblocks them;
+   - **manages all users** on the Team page: add people, rename them, change roles, reset passwords, block or deactivate.
+
+An unhappy buyer or seller can email the appeals address, which opens a new case for a different investigator with the manager joined.

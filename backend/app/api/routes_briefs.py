@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from backend.app.services.auth_service import case_scope, case_user
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
 from backend.app.schemas.brief import InvestigationBriefResponse
 from backend.app.services.ai_service import AIService
 from backend.app.services.audit_service import AuditService
 
-router = APIRouter(tags=["AI Investigation Briefs"])
+router = APIRouter(tags=["AI Investigation Briefs"], dependencies=[Depends(case_user), Depends(case_scope)])
 
 @router.post("/disputes/{dispute_id}/brief", response_model=InvestigationBriefResponse)
 async def generate_investigation_brief(
