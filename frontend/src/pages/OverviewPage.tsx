@@ -1,13 +1,13 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Gavel, Hourglass, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CheckCircle2, Clock, FolderOpen, Gavel, Hourglass, RefreshCw, ShieldAlert, ShieldCheck, XCircle } from 'lucide-react';
 import { fetchDashboardSummary, fetchDisputes } from '../api/client';
 import { Badge, Button, Card, CountUp, EmptyState, ErrorState, Meter, PageHeader, SectionTitle, Skeleton } from '../components/ui/kit';
 import { DecideBy, ScoreRing } from '../components/DisputeBits';
 import { cn, money, OPEN_STATUSES, reasonLabel, timeAgo, Tone } from '../lib/format';
 import { useNow } from '../lib/hooks';
-import { CURRENT_USER, firstName } from '../lib/user';
+import { firstName, useCurrentUser } from '../lib/user';
 
 const REFRESH_MS = 30_000;
 
@@ -44,8 +44,9 @@ function Kpi({ label, value, hint, icon, tone, onClick }: {
 export function OverviewPage() {
   const navigate = useNavigate();
   const now = useNow(10_000);
+  const { user, isAdmin } = useCurrentUser();
 
-  const summary = useQuery({ queryKey: ['dashboardSummary'], queryFn: fetchDashboardSummary, refetchInterval: REFRESH_MS });
+  const summary = useQuery({ queryKey: ['dashboardSummary', user.name], queryFn: () => fetchDashboardSummary(user.name), refetchInterval: REFRESH_MS });
   const urgent = useQuery({
     queryKey: ['urgentDisputes'],
     queryFn: () => fetchDisputes({ sort_by: 'priority_score', sort_order: 'desc' }),
@@ -71,7 +72,7 @@ export function OverviewPage() {
   return (
     <>
       <PageHeader
-        title={`${greeting()}, ${firstName(CURRENT_USER.name)}`}
+        title={`${greeting()}, ${firstName(user.name)}`}
         subtitle="Dispute Overview. Here's what needs your attention first."
         actions={
           <>
@@ -86,15 +87,18 @@ export function OverviewPage() {
         }
       />
 
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {!data ? (
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[132px] rounded-2xl" />)
         ) : (
           <>
+            {isAdmin
+              ? <Kpi label="Needs your review" value={data.pending_admin_review_count} hint="Decisions waiting for you to confirm" tone="warn" icon={<ShieldCheck className="h-[18px] w-[18px]" />} onClick={() => navigate('/admin')} />
+              : <Kpi label="Your cases" value={data.my_cases_count} hint="Open cases you are working" tone="brand" icon={<FolderOpen className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=mine')} />}
             <Kpi label="Open disputes" value={data.total_open_disputes} hint={`${data.new_cases_count} new, nobody asked yet`} tone="brand" icon={<ShieldAlert className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue')} />
             <Kpi label="Decide within 48 hours" value={data.approaching_deadline_count} hint="Target date is close or passed" tone="warn" icon={<Clock className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=due')} />
             <Kpi label="Waiting on replies" value={data.waiting_on_parties_count} hint="Seller or buyer owes us evidence" tone="danger" icon={<Hourglass className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=waiting')} />
-            <Kpi label="Ready to decide" value={data.awaiting_review_count} hint="The evidence is in" tone="success" icon={<Gavel className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=ready')} />
+            <Kpi label="Ready to decide" value={data.awaiting_review_count} hint="Time is up or the evidence is in. Decide now" tone="success" icon={<Gavel className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=ready')} />
           </>
         )}
       </section>

@@ -72,3 +72,29 @@ class ActionDraftResponse(BaseModel):
     source: str  # "rules" or "llm"
     model: Optional[str] = None
     evidence_balance: Optional[EvidenceBalance] = None  # decisions only
+
+
+class DecisionSubmitRequest(BaseModel):
+    """An investigator's proposed decision. It goes to an admin; nobody is told until the admin confirms it."""
+    outcome: str  # BUYER_FAVOR or SELLER_FAVOR
+    reason: str
+    confirmed: bool
+    actor: Optional[str] = None
+
+
+class AdminReviewRequest(BaseModel):
+    action: str  # APPROVE, OVERRIDE or REOPEN
+    reviewer: str
+    role: str = "ADMIN"
+    outcome: Optional[str] = None   # OVERRIDE only: the admin's own call
+    note: Optional[str] = None
+    message: Optional[str] = None   # the notice both parties will get (APPROVE and OVERRIDE)
+    subject: Optional[str] = None
+
+
+class AssignRequest(BaseModel):
+    assignee: Optional[str] = None  # None releases the case
+
+
+class DeclareRequest(BaseModel):
+    kind: str  # SETTLED, or WITHDRAWN (buyer only)

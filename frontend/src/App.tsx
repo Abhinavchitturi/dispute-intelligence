@@ -13,6 +13,7 @@ import { SimilarCasesPage } from './pages/SimilarCasesPage';
 import { PatternInsightsPage } from './pages/PatternInsightsPage';
 import { AuditTrailPage } from './pages/AuditTrailPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AdminReviewPage } from './pages/AdminReviewPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,6 +37,7 @@ export function App() {
             <Route path="investigate" element={<InvestigationLanding />} />
             <Route path="priority" element={<PriorityScoresPage />} />
             <Route path="messages" element={<MessagesPage />} />
+            <Route path="admin" element={<AdminReviewPage />} />
             <Route path="investigate/:disputeId" element={<CaseInvestigationPage />} />
             <Route path="similar" element={<SimilarCasesPage />} />
             <Route path="patterns" element={<PatternInsightsPage />} />

@@ -69,6 +69,8 @@ describe('ResolveIQ Page Components Suite', () => {
             awaiting_review_count: 5,
             new_cases_count: 2,
             waiting_on_parties_count: 3,
+            my_cases_count: 4,
+            pending_admin_review_count: 2,
             disputes_by_reason: [
               { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', count: 6 },
               { reason: 'MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED', count: 3 }
@@ -101,18 +103,23 @@ describe('ResolveIQ Page Components Suite', () => {
       expect(screen.getAllByText('3').length).toBeGreaterThan(0); // deadlines < 48h
     });
 
-    // The four tiles tell PayPal where cases stand: open, due soon, waiting on a party, ready to decide.
+    // The tiles tell PayPal where cases stand: yours, open, due soon, waiting on a party, ready to decide.
     for (const [label, count, hint] of [
+      ['Your cases', '4', 'Open cases you are working'],
       ['Open disputes', '12', '2 new, nobody asked yet'],
       ['Decide within 48 hours', '3', 'Target date is close or passed'],
       ['Waiting on replies', '3', 'Seller or buyer owes us evidence'],
-      ['Ready to decide', '5', 'The evidence is in'],
+      ['Ready to decide', '5', 'Time is up or the evidence is in. Decide now'],
     ]) {
       const tile = screen.getByText(label).closest('button') as HTMLElement;
       expect(tile).toHaveTextContent(count);
       expect(tile).toHaveTextContent(hint);
     }
     expect(screen.queryByText(/Waiting on seller/i)).not.toBeInTheDocument(); // the old seller-side tile
+
+    // Each tile opens the matching list. "Your cases" is the investigator's own.
+    fireEvent.click(screen.getByText('Your cases').closest('button') as HTMLElement);
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/queue?view=mine'));
   });
 
   it('renders Dispute Queue with search, sorting and cases', async () => {

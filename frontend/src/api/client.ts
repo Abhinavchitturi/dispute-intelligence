@@ -12,13 +12,14 @@ import {
   ActionDraft,
   EvidenceRequestOptions,
   DisputeMessage,
-  MessageThreadSummary
+  MessageThreadSummary,
+  EvidenceSummary
 } from '../types';
 
 const API_BASE = '/api';
 
-export async function fetchDashboardSummary(): Promise<DashboardSummary> {
-  const res = await fetch(`${API_BASE}/dashboard/summary`);
+export async function fetchDashboardSummary(assignee?: string): Promise<DashboardSummary> {
+  const res = await fetch(`${API_BASE}/dashboard/summary${assignee ? `?assignee=${encodeURIComponent(assignee)}` : ''}`);
   if (!res.ok) throw new Error(`Failed to fetch dashboard summary: ${res.statusText}`);
   return res.json();
 }
@@ -30,6 +31,7 @@ export async function fetchDisputes(params?: {
   source?: string;
   evidence_status?: string;
   priority_level?: string;
+  assigned_to?: string;
   sort_by?: string;
   sort_order?: string;
 }): Promise<DisputeSummary[]> {
@@ -40,6 +42,7 @@ export async function fetchDisputes(params?: {
   if (params?.source && params.source !== 'ALL') query.set('source', params.source);
   if (params?.evidence_status && params.evidence_status !== 'ALL') query.set('evidence_status', params.evidence_status);
   if (params?.priority_level && params.priority_level !== 'ALL') query.set('priority_level', params.priority_level);
+  if (params?.assigned_to) query.set('assigned_to', params.assigned_to);
   if (params?.sort_by) query.set('sort_by', params.sort_by);
   if (params?.sort_order) query.set('sort_order', params.sort_order);
 
@@ -218,4 +221,46 @@ export async function simulateReply(messageId: string): Promise<DisputeMessage> 
     throw new Error(err.detail || 'Failed to simulate reply');
   }
   return res.json();
+}
+
+async function post<T>(url: string, body: unknown, fallback: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${url}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || fallback);
+  }
+  return res.json();
+}
+
+export async function fetchEvidenceSummary(disputeId: string): Promise<EvidenceSummary> {
+  const res = await fetch(`${API_BASE}/disputes/${disputeId}/evidence-summary`);
+  if (!res.ok) throw new Error('Failed to fetch evidence summary');
+  return res.json();
+}
+
+/** The investigator's call. It goes to an admin; nobody is told until the admin confirms. */
+export function submitDecision(disputeId: string, payload: { outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR'; reason: string; actor: string }) {
+  return post<{ message: string; status: string }>(`/disputes/${disputeId}/decision`, { ...payload, confirmed: true }, 'Failed to submit the decision');
+}
+
+export function adminReview(disputeId: string, payload: { action: 'APPROVE' | 'OVERRIDE' | 'REOPEN'; reviewer: string; outcome?: string; note?: string }) {
+  return post<{ message: string; status: string }>(`/disputes/${disputeId}/admin-review`, { ...payload, role: 'ADMIN' }, 'Failed to review the decision');
+}
+
+export function assignDispute(disputeId: string, assignee: string | null) {
+  return post<{ assigned_to: string | null }>(`/disputes/${disputeId}/assign`, { assignee }, 'Failed to update the owner of this case');
+}
+
+export function declareFromParty(disputeId: string, party: 'SELLER' | 'BUYER', kind: 'SETTLED' | 'WITHDRAWN') {
+  return post<DisputeMessage>(`/disputes/${disputeId}/parties/${party}/declare`, { kind }, 'Failed to record that');
+}
+
+/** The generated document for a piece of evidence, as HTML (or SVG for a photo placeholder). */
+export async function fetchEvidencePreview(evidenceId: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/evidence/${encodeURIComponent(evidenceId)}/preview`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'No preview available');
+  }
+  return res.text();
 }

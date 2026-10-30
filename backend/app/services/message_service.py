@@ -13,7 +13,8 @@ from backend.app.schemas.messages import ThreadSummary
 from backend.app.services import evidence_catalog as cat
 from backend.app.services.audit_service import AuditService
 
-OPEN_STATUSES = ["OPEN", "WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "WAITING_FOR_BOTH_RESPONSES", "UNDER_REVIEW"]
+PENDING_REVIEW = "PENDING_ADMIN_REVIEW"  # an investigator proposed a decision and an admin has yet to confirm it
+OPEN_STATUSES = ["OPEN", "WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "WAITING_FOR_BOTH_RESPONSES", "UNDER_REVIEW", PENDING_REVIEW]
 CLOSED = ("RESOLVED", "CLOSED")
 
 REQUEST_ACTIONS = {"REQUEST_SELLER_EVIDENCE": cat.SELLER, "REQUEST_BUYER_EVIDENCE": cat.BUYER}
@@ -230,7 +231,8 @@ class MessageService:
         outbound.reply_due_at = None
         db.add(inbound)
         db.flush()
-        dispute.status = cls.status_from_requests(db, dispute)
+        if dispute.status != PENDING_REVIEW:
+            dispute.status = cls.status_from_requests(db, dispute)
         if dispute.evidence_status != "CONFLICTING":  # a conflict between the sides isn't resolved by more documents arriving
             still_missing = any(e.availability_status in ("MISSING", "NOT_REQUESTED") for e in dispute.evidence_items)
             dispute.evidence_status = "PARTIAL" if still_missing else "COMPLETE"
@@ -246,9 +248,41 @@ class MessageService:
         return inbound
 
     @classmethod
+    def expire_overdue(cls, db: Session, now: Optional[datetime] = None) -> int:
+        """When a reply deadline passes, stop waiting. The case becomes Ready to decide and whatever never arrived stays missing."""
+        now = now or datetime.utcnow()
+        touched = set()
+        for m in db.query(DisputeMessage).filter(DisputeMessage.direction == "OUTBOUND", DisputeMessage.awaiting_reply.is_(True)).all():
+            raw = m.deadline
+            try:
+                due = datetime.fromisoformat(raw) if raw else None
+            except ValueError:
+                due = None
+            if due is None or due > now:
+                continue
+            meta = m._meta()
+            meta["expired"] = True
+            m.meta_json = json.dumps(meta)
+            m.awaiting_reply = False
+            m.reply_due_at = None
+            touched.add(m.dispute_id)
+        db.flush()
+        for did in touched:
+            d = db.query(Dispute).filter(Dispute.id == did).first()
+            if d and d.status not in CLOSED and d.status != PENDING_REVIEW:
+                d.status = cls.status_from_requests(db, d)
+                AuditService.record_event(
+                    db=db, dispute_id=d.id, actor="system", action="REPLY_DEADLINE_PASSED", status="SUCCESS", source=d.source,
+                    result_summary="The reply deadline passed. Anything not received is missing. The case is ready to decide.",
+                )
+        db.commit()
+        return len(touched)
+
+    @classmethod
     def deliver_due(cls, db: Session, dispute_id: Optional[str] = None, now: Optional[datetime] = None) -> int:
         """Delivers every simulated reply whose wait is over. Called whenever messages are read."""
         now = now or datetime.utcnow()
+        cls.expire_overdue(db, now)
         q = db.query(DisputeMessage).filter(
             DisputeMessage.awaiting_reply.is_(True), DisputeMessage.reply_due_at.isnot(None), DisputeMessage.reply_due_at <= now
         )
@@ -271,13 +305,15 @@ class MessageService:
             waiting_on = "Seller and buyer" if len(parties) == 2 else _party_label(next(iter(parties)))
         elif dispute.status in CLOSED:
             state, waiting_on = "CLOSED", None
+        elif dispute.status == PENDING_REVIEW:
+            state, waiting_on = "IN_REVIEW", None  # the investigator has decided and an admin is checking it
         else:
             state, waiting_on = "YOUR_TURN", None  # every request has been answered, so it's PayPal's move
         preview = " ".join(last.body.split())
         return ThreadSummary(
             dispute_id=dispute.id, buyer_reference=dispute.buyer_reference, merchant_reference=dispute.merchant_reference,
             reason=dispute.reason, amount=dispute.amount, currency=dispute.currency, dispute_status=dispute.status,
-            state=state, waiting_on=waiting_on,
+            state=state, waiting_on=waiting_on, assigned_to=dispute.assigned_to,
             last_message_preview=preview[:140] + ("…" if len(preview) > 140 else ""),
             last_message_at=last.created_at, last_direction=last.direction,
             unread_count=sum(1 for m in messages if m.direction == "INBOUND" and not m.is_read),

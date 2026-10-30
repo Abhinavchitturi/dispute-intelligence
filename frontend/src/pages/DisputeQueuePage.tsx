@@ -1,17 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowDownUp, ChevronRight, Eye, FilterX, Inbox, RefreshCw } from 'lucide-react';
-import { fetchDisputeDetail, fetchDisputes } from '../api/client';
+import { ArrowDownUp, ChevronRight, Eye, FilterX, Gavel, HandHelping, Inbox, RefreshCw } from 'lucide-react';
+import { assignDispute, fetchDisputeDetail, fetchDisputes } from '../api/client';
 import { DisputeSummary } from '../types';
 import { Badge, Button, Card, Drawer, EmptyState, ErrorState, KeyValue, Meter, PageHeader, SearchInput, Segmented, Select, Skeleton } from '../components/ui/kit';
 import { EvidenceBadge, StatusBadge } from '../components/ui/StatusBadges';
 import { DecideBy, Countdown, ScoreRing } from '../components/DisputeBits';
 import { cn, isUrgent, money, OPEN_STATUSES, reasonLabel, timeLeft, WAITING_STATUSES } from '../lib/format';
 import { useDebounced, useNow } from '../lib/hooks';
+import { useCurrentUser } from '../lib/user';
 
-type View = 'all' | 'new' | 'waiting' | 'ready' | 'urgent' | 'due';
-const VIEWS: View[] = ['all', 'new', 'waiting', 'ready', 'urgent', 'due'];
+type View = 'all' | 'mine' | 'new' | 'waiting' | 'ready' | 'review' | 'urgent' | 'due';
+const VIEWS: View[] = ['all', 'mine', 'new', 'waiting', 'ready', 'review', 'urgent', 'due'];
 const SORTS = {
   priority: { by: 'priority_score', order: 'desc', label: 'Most urgent' },
   amount: { by: 'amount', order: 'desc', label: 'Highest amount' },
@@ -24,8 +25,10 @@ const REASON_OPTIONS = [
   'UNAUTHORISED', 'CANCELLED_OR_RETURNED', 'DUPLICATE_TRANSACTION',
 ];
 
-function matchesView(d: DisputeSummary, view: View, now: number) {
+function matchesView(d: DisputeSummary, view: View, now: number, me: string) {
   switch (view) {
+    case 'mine': return d.assigned_to === me; // open and finished, so a case you decided doesn't vanish
+    case 'review': return d.status === 'PENDING_ADMIN_REVIEW';
     case 'new': return d.status === 'OPEN';
     case 'waiting': return WAITING_STATUSES.includes(d.status);
     case 'ready': return d.status === 'UNDER_REVIEW';
@@ -38,6 +41,8 @@ function matchesView(d: DisputeSummary, view: View, now: number) {
 export function DisputeQueuePage() {
   const navigate = useNavigate();
   const now = useNow();
+  const { user, isAdmin } = useCurrentUser();
+  const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
 
   const initialView: View = VIEWS.includes(params.get('view') as View) ? (params.get('view') as View) : params.get('priority_level') === 'high' ? 'urgent' : 'all';
@@ -72,11 +77,15 @@ export function DisputeQueuePage() {
 
   const counts = useMemo(() => {
     const list = data ?? [];
-    const c = (v: View) => list.filter((d) => matchesView(d, v, now)).length;
-    return { all: list.length, new: c('new'), waiting: c('waiting'), ready: c('ready'), urgent: c('urgent'), due: c('due') };
-  }, [data, now]);
+    const c = (v: View) => list.filter((d) => matchesView(d, v, now, user.name)).length;
+    return { all: list.length, mine: c('mine'), new: c('new'), waiting: c('waiting'), ready: c('ready'), review: c('review'), urgent: c('urgent'), due: c('due') };
+  }, [data, now, user.name]);
 
-  const rows = useMemo(() => (data ?? []).filter((d) => matchesView(d, view, now)), [data, view, now]);
+  const rows = useMemo(() => (data ?? []).filter((d) => matchesView(d, view, now, user.name)), [data, view, now, user.name]);
+  const take = useMutation({
+    mutationFn: (id: string) => assignDispute(id, user.name),
+    onSuccess: () => ['disputes', 'urgentDisputes', 'dashboardSummary', 'disputeDetail'].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] })),
+  });
   const filtered = view !== 'all' || !!dq || reason !== 'ALL' || status !== 'ALL';
   const clearAll = () => { setView('all'); setSearch(''); setReason('ALL'); setStatus('ALL'); setSort('priority'); };
 
@@ -104,15 +113,17 @@ export function DisputeQueuePage() {
           onChange={setView}
           options={[
             { value: 'all', label: 'All', count: counts.all },
+            { value: 'mine', label: 'Your cases', count: counts.mine },
             { value: 'new', label: 'New', count: counts.new },
             { value: 'waiting', label: 'Waiting on replies', count: counts.waiting },
             { value: 'ready', label: 'Ready to decide', count: counts.ready },
+            ...(isAdmin ? [{ value: 'review' as View, label: 'With admin', count: counts.review }] : []),
             { value: 'urgent', label: 'Urgent', count: counts.urgent },
             { value: 'due', label: 'Due soon', count: counts.due },
           ]}
         />
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_200px_200px_190px_auto]">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_200px_200px_190px_auto]">
           <SearchInput value={search} onChange={setSearch} placeholder="Search case, buyer, seller or transaction" />
           <Select value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Filter by reason">
             <option value="ALL">All reasons</option>
@@ -125,12 +136,13 @@ export function DisputeQueuePage() {
             <option value="WAITING_FOR_BUYER_RESPONSE">Waiting on buyer</option>
             <option value="WAITING_FOR_BOTH_RESPONSES">Waiting on both</option>
             <option value="UNDER_REVIEW">Ready to decide</option>
+            <option value="PENDING_ADMIN_REVIEW">With admin</option>
             <option value="RESOLVED">Resolved</option>
             <option value="CLOSED">Closed</option>
           </Select>
           <div className="relative">
-            <ArrowDownUp className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-            <Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="pl-9" aria-label="Sort disputes">
+            <ArrowDownUp className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+            <Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="h-full pl-10" aria-label="Sort disputes">
               {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
             </Select>
           </div>
@@ -139,6 +151,13 @@ export function DisputeQueuePage() {
           )}
         </div>
       </div>
+
+      {view === 'ready' && (
+        <div role="note" className="flex items-start gap-3 rounded-2xl border border-brand/30 bg-brand/10 p-4 text-sm text-slate-100">
+          <Gavel aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-brand-soft" />
+          <p><span className="font-medium text-white">Time to decide.</span> Every request is answered, or its reply deadline has passed. Open a case, check what arrived and what is missing, then make the call.</p>
+        </div>
+      )}
 
       {error ? (
         <ErrorState message="Couldn't load disputes." onRetry={() => refetch()} />
@@ -172,6 +191,7 @@ export function DisputeQueuePage() {
                         {d.buyer_reference ?? 'Buyer'} <span className="text-muted">vs {d.merchant_reference ?? 'Seller'}</span>
                         {d.buyer_claim && <span className="text-muted"> · “{d.buyer_claim}”</span>}
                       </p>
+                      <p className="mt-0.5 text-xs text-muted">{d.assigned_to ? (d.assigned_to === user.name ? 'Yours' : `Owner: ${d.assigned_to}`) : 'Unassigned'}</p>
                     </div>
                     <div className="hidden w-40 flex-col items-start gap-1.5 lg:flex">
                       <StatusBadge status={d.status} />
@@ -183,6 +203,11 @@ export function DisputeQueuePage() {
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-muted transition group-hover:translate-x-0.5 group-hover:text-white" />
                   </button>
+                  {!d.assigned_to && OPEN_STATUSES.includes(d.status) && !isAdmin && (
+                    <Button size="sm" variant="ghost" loading={take.isPending && take.variables === d.id} onClick={() => take.mutate(d.id)} aria-label={`Take case ${d.id}`}>
+                      <HandHelping className="h-3.5 w-3.5" />Take
+                    </Button>
+                  )}
                   <button
                     onClick={() => setOpen(d.id)}
                     aria-label={`Quick view ${d.id}`}
@@ -244,6 +269,7 @@ function PreviewDrawer({ id, onClose, onOpenCase }: { id: string | null; onClose
             <KeyValue label="Seller">{d.merchant_reference ?? '—'}</KeyValue>
             <KeyValue label="Transaction" mono>{d.transaction_id ?? '—'}</KeyValue>
             <KeyValue label="Evidence"><EvidenceBadge status={d.evidence_status} /></KeyValue>
+            <KeyValue label="Owner">{d.assigned_to ?? 'Unassigned'}</KeyValue>
           </dl>
 
           <section>

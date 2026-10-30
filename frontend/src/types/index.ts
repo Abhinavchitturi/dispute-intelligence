@@ -24,7 +24,30 @@ export interface DisputeSummary {
   priority_factors: PriorityFactor[];
   evidence_status: string;
   buyer_claim: string | null;
-  outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null;
+  outcome: Outcome | null;
+  assigned_to: string | null;
+  proposed_outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null;
+  proposed_reason: string | null;
+  proposed_by: string | null;
+  proposed_at: string | null;
+  review_note: string | null;
+  reviewed_by: string | null;
+  seller_settled_at: string | null;
+  buyer_settled_at: string | null;
+}
+
+/** How a case ended. SETTLED = both sides said so. DISMISSED = the buyer withdrew. */
+export type Outcome = 'BUYER_FAVOR' | 'SELLER_FAVOR' | 'SETTLED' | 'DISMISSED';
+
+/** Something the buyer said that needs following up, and whether the proof is on the case. */
+export interface ClaimPoint {
+  key: string;
+  label: string;
+  quote: string;
+  note: string;
+  on_file: boolean;
+  evidence_type: string | null;
+  party: 'SELLER' | 'BUYER' | null;
 }
 
 export interface TransactionInfo {
@@ -84,6 +107,7 @@ export interface DisputeDetail extends DisputeSummary {
   order: OrderInfo | null;
   evidence_items: EvidenceItem[];
   latest_brief_id: string | null;
+  claim_points: ClaimPoint[];
 }
 
 export interface Finding {
@@ -134,6 +158,7 @@ export interface TimelineEvent {
   source: string;
   source_record_id: string | null;
   status: string | null;
+  claim_points?: ClaimPoint[];
 }
 
 export interface HistoricalCase {
@@ -171,6 +196,8 @@ export interface DashboardSummary {
   awaiting_review_count: number;
   new_cases_count: number;
   waiting_on_parties_count: number;
+  my_cases_count: number;
+  pending_admin_review_count: number;
   disputes_by_reason: { reason: string; count: number }[];
   priority_distribution: { high: number; medium: number; low: number };
   recent_activity: any[];
@@ -270,7 +297,7 @@ export interface MessageThreadSummary {
   amount: number;
   currency: string;
   dispute_status: string;
-  state: 'WAITING' | 'YOUR_TURN' | 'CLOSED';
+  state: 'WAITING' | 'YOUR_TURN' | 'IN_REVIEW' | 'CLOSED';
   waiting_on: 'Seller' | 'Buyer' | 'Seller and buyer' | null;
   last_message_preview: string;
   last_message_at: string;
@@ -281,7 +308,8 @@ export interface MessageThreadSummary {
   expected_reply_at: string | null;
   simulated: boolean;
   pending_message_ids: string[];
-  outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null;
+  outcome: Outcome | null;
+  assigned_to?: string | null;
 }
 
 export interface EvidenceRequestOption {
@@ -297,3 +325,31 @@ export interface EvidenceRequestOptions {
   seller: EvidenceRequestOption[];
   buyer: EvidenceRequestOption[];
 }
+
+/** One line of the per-side evidence checklist. Missing items say why. */
+export interface EvidenceLine {
+  evidence_type: string;
+  label: string;
+  party: 'SELLER' | 'BUYER' | null;
+  status: 'PROVIDED' | 'MISSING';
+  detail: string;
+  why: string;
+  description: string | null;
+  evidence_id: string | null;
+  provided_at: string | null;
+  file_name: string | null;
+  content_type: string | null;
+  size_bytes: number | null;
+  duration_seconds: number | null;
+  storage: string | null;
+  preview: 'DOCUMENT' | 'IMAGE' | null;  // null for video: the demo never generates one
+  is_video: boolean;
+}
+
+export interface EvidenceSummary {
+  seller: EvidenceLine[];
+  buyer: EvidenceLine[];
+  records: EvidenceLine[];
+}
+
+export type Role = 'investigator' | 'admin';

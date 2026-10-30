@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, asc, or_
 
@@ -20,16 +20,28 @@ from backend.app.schemas.dispute import (
 )
 from backend.app.schemas.integrations import DashboardSummaryResponse
 from backend.app.services.similar_cases_service import SimilarCasesService
+from backend.app.services import claim_service, evidence_documents, evidence_summary
+from backend.app.services.message_service import MessageService, OPEN_STATUSES as OPEN_STATUS_LIST
+
+_PROPOSAL_FIELDS = (
+    "assigned_to", "proposed_outcome", "proposed_reason", "proposed_by", "proposed_at",
+    "review_note", "reviewed_by", "seller_settled_at", "buyer_settled_at",
+)
+
+
+def _proposal_data(d: Dispute) -> dict:
+    return {f: getattr(d, f) for f in _PROPOSAL_FIELDS}
 
 router = APIRouter(tags=["Disputes"])
 
 @router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
-def get_dashboard_summary(db: Session = Depends(get_db)):
-    """Aggregates real database metrics for the overview dashboard."""
+def get_dashboard_summary(assignee: Optional[str] = None, db: Session = Depends(get_db)):
+    """Aggregates real database metrics for the overview dashboard. Pass the signed-in investigator as `assignee` for their own count."""
     now = datetime.utcnow()
-    
+    MessageService.expire_overdue(db, now)  # a passed reply deadline makes the case Ready to decide
+
     # 1. Open disputes: anything PayPal hasn't decided yet
-    open_statuses = ["OPEN", "WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "WAITING_FOR_BOTH_RESPONSES", "UNDER_REVIEW"]
+    open_statuses = OPEN_STATUS_LIST
     total_open = db.query(Dispute).filter(Dispute.status.in_(open_statuses)).count()
 
     # 2. Decision targets coming up (< 48 hrs) or already missed
@@ -50,6 +62,9 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
     new_cases = db.query(Dispute).filter(Dispute.status == "OPEN").count()
     waiting_on_parties = db.query(Dispute).filter(Dispute.status.in_(
         ["WAITING_FOR_SELLER_RESPONSE", "WAITING_FOR_BUYER_RESPONSE", "WAITING_FOR_BOTH_RESPONSES"])).count()
+
+    mine = db.query(Dispute).filter(Dispute.status.in_(open_statuses), Dispute.assigned_to == assignee).count() if assignee else 0
+    pending_review = db.query(Dispute).filter(Dispute.status == "PENDING_ADMIN_REVIEW").count()
 
     # 5. Volume by Reason
     reason_counts = {}
@@ -97,6 +112,8 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         awaiting_review_count=awaiting_review,
         new_cases_count=new_cases,
         waiting_on_parties_count=waiting_on_parties,
+        my_cases_count=mine,
+        pending_admin_review_count=pending_review,
         disputes_by_reason=disputes_by_reason,
         priority_distribution={"high": p_high, "medium": p_med, "low": p_low},
         recent_activity=recent_activity,
@@ -111,6 +128,7 @@ def list_disputes(
     source: Optional[str] = None,
     evidence_status: Optional[str] = None,
     priority_level: Optional[str] = None,  # high, medium, low
+    assigned_to: Optional[str] = None,
     sort_by: str = "priority_score",
     sort_order: str = "desc",
     skip: int = 0,
@@ -118,7 +136,11 @@ def list_disputes(
     db: Session = Depends(get_db)
 ):
     """Lists disputes with multi-attribute filtering, search, sorting, and pagination."""
+    MessageService.expire_overdue(db)
     query = db.query(Dispute)
+
+    if assigned_to:
+        query = query.filter(Dispute.assigned_to == assigned_to)
 
     if search:
         search_term = f"%{search.strip()}%"
@@ -191,7 +213,8 @@ def list_disputes(
             priority_factors=factors,
             evidence_status=d.evidence_status,
             buyer_claim=d.buyer_claim,
-            outcome=d.outcome
+            outcome=d.outcome,
+            **_proposal_data(d),
         )
         results.append(item)
 
@@ -234,10 +257,12 @@ def get_dispute_detail(dispute_id: str, db: Session = Depends(get_db)):
         evidence_status=dispute.evidence_status,
         buyer_claim=dispute.buyer_claim,
         outcome=dispute.outcome,
+        **_proposal_data(dispute),
         transaction=dispute.transaction,
         order=dispute.order,
         evidence_items=dispute.evidence_items,
-        latest_brief_id=latest_brief_id
+        latest_brief_id=latest_brief_id,
+        claim_points=claim_service.extract(dispute),
     )
 
 @router.get("/disputes/{dispute_id}/timeline", response_model=List[TimelineEvent])
@@ -311,7 +336,8 @@ def get_dispute_timeline(dispute_id: str, db: Session = Depends(get_db)):
             description=f"Buyer assertion: \"{dispute.buyer_claim or 'No initial statement'}\"",
             source=dispute.source,
             source_record_id=dispute.id,
-            status=dispute.status
+            status=dispute.status,
+            claim_points=claim_service.extract(dispute),
         ))
 
     # 5. Evidence Submissions
@@ -344,6 +370,27 @@ def get_dispute_timeline(dispute_id: str, db: Session = Depends(get_db)):
     # Sort chronological
     events.sort(key=lambda x: x.timestamp)
     return events
+
+@router.get("/disputes/{dispute_id}/evidence-summary")
+def get_evidence_summary(dispute_id: str, db: Session = Depends(get_db)):
+    """What each side has sent and what is missing. Missing items say why."""
+    dispute = db.query(Dispute).filter(Dispute.id == dispute_id).first()
+    if not dispute:
+        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+    return evidence_summary.build(dispute)
+
+@router.get("/evidence/{evidence_id}/preview")
+def preview_evidence(evidence_id: str, db: Session = Depends(get_db)):
+    """A readable copy of a document (or a labelled placeholder for a photo). Videos have no preview."""
+    ev = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+    if not ev or ev.availability_status != "AVAILABLE":
+        raise HTTPException(status_code=404, detail="That evidence is not on file.")
+    dispute = db.query(Dispute).filter(Dispute.id == ev.dispute_id).first()
+    doc = evidence_documents.for_evidence(ev, dispute)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Videos can't be previewed here. The file is held by PayPal.")
+    # The page is generated from our own records, but it is still shown in a sandboxed frame.
+    return Response(content=doc["content"], media_type=doc["media_type"], headers={"Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff"})
 
 @router.get("/disputes/{dispute_id}/evidence", response_model=List[EvidenceSchema])
 def get_dispute_evidence(dispute_id: str, db: Session = Depends(get_db)):

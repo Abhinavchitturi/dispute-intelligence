@@ -7,7 +7,7 @@ import { useCountUp, useEscape } from '../../lib/hooks';
 /* ---------- Surfaces ---------- */
 export function Card({ className, children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('rounded-2xl border border-line bg-surface', className)} {...rest}>
+    <div className={cn('rounded-[18px] border border-line/70 bg-surface', className)} {...rest}>
       {children}
     </div>
   );
@@ -17,7 +17,7 @@ export function SectionTitle({ title, hint, action }: { title: string; hint?: st
   return (
     <div className="flex items-end justify-between gap-3 mb-4">
       <div>
-        <h2 className="text-[15px] font-semibold text-white">{title}</h2>
+        <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-white">{title}</h2>
         {hint && <p className="text-[13px] text-muted mt-0.5">{hint}</p>}
       </div>
       {action}
@@ -29,8 +29,9 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   return (
     <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 animate-fade-in">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-white">{title}</h1>
-        {subtitle && <p className="text-sm text-muted mt-1 max-w-2xl">{subtitle}</p>}
+        {/* A large title, as at the top of an Apple app screen. */}
+        <h1 className="text-[34px] font-bold leading-tight tracking-[-0.022em] text-white">{title}</h1>
+        {subtitle && <p className="mt-1 max-w-2xl text-[15px] text-muted">{subtitle}</p>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>
@@ -73,17 +74,18 @@ type BtnProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 export function Button({ variant = 'secondary', size = 'md', loading, className, children, disabled, ...rest }: BtnProps) {
   const variants = {
-    primary: 'bg-brand text-white hover:bg-brand-deep shadow-lg shadow-brand/20',
-    secondary: 'bg-raised text-slate-100 border border-line-strong hover:border-brand/50 hover:bg-[#1B2236]',
-    ghost: 'text-muted hover:text-white hover:bg-white/5',
-    danger: 'bg-rose-500/90 text-white hover:bg-rose-500',
+    // Filled for the main action, tinted for the others, plain text for the quietest: the three weights iOS buttons use.
+    primary: 'bg-brand text-white hover:bg-brand-deep',
+    secondary: 'bg-white/[.1] text-white hover:bg-white/[.16]',
+    ghost: 'text-brand-soft hover:bg-white/[.06]',
+    danger: 'bg-rose-500 text-white hover:bg-rose-400',
   };
   return (
     <button
       disabled={disabled || loading}
       className={cn(
-        'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl font-medium transition active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none',
-        size === 'sm' ? 'px-3 py-1.5 text-[13px]' : 'px-4 py-2.5 text-sm',
+        'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full font-medium transition duration-150 active:scale-[.97] active:opacity-80 disabled:opacity-40 disabled:pointer-events-none',
+        size === 'sm' ? 'min-h-[32px] px-3.5 py-1.5 text-[13px]' : 'min-h-[40px] px-5 py-2.5 text-[15px]',
         variants[variant], className,
       )}
       {...rest}
@@ -94,7 +96,7 @@ export function Button({ variant = 'secondary', size = 'md', loading, className,
   );
 }
 
-const fieldCls = 'w-full rounded-xl border border-line-strong bg-raised px-3 py-2.5 text-sm text-slate-100 placeholder:text-muted transition focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20';
+const fieldCls = 'w-full rounded-xl border border-transparent bg-raised px-3.5 py-2.5 text-[15px] text-white placeholder:text-muted transition focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/25';
 
 export function SearchInput({ value, onChange, placeholder, className }: {
   value: string; onChange: (v: string) => void; placeholder?: string; className?: string;
@@ -119,7 +121,8 @@ export function SearchInput({ value, onChange, placeholder, className }: {
 }
 
 export function Select({ className, children, ...rest }: React.SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className={cn(fieldCls, 'cursor-pointer pr-8', className)} {...rest}>{children}</select>;
+  // Native selects ignore vertical padding, so give them the same fixed height as the other fields.
+  return <select className={cn(fieldCls, 'h-[42px] cursor-pointer py-0 pr-8', className)} {...rest}>{children}</select>;
 }
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={cn(fieldCls, props.className)} />;
@@ -142,7 +145,7 @@ export function Segmented<T extends string>({ value, onChange, options }: {
   options: { value: T; label: string; count?: number; tone?: Tone }[];
 }) {
   return (
-    <div role="tablist" className="inline-flex max-w-full gap-1 overflow-x-auto rounded-xl border border-line bg-surface p-1">
+    <div role="tablist" className="inline-flex max-w-full gap-0.5 overflow-x-auto rounded-[11px] bg-raised/80 p-0.5">
       {options.map((o) => {
         const active = o.value === value;
         return (
@@ -152,13 +155,13 @@ export function Segmented<T extends string>({ value, onChange, options }: {
             aria-selected={active}
             onClick={() => onChange(o.value)}
             className={cn(
-              'flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-1.5 text-[13px] font-medium transition',
-              active ? 'bg-brand/15 text-white shadow-inner ring-1 ring-brand/30' : 'text-muted hover:text-white hover:bg-white/5',
+              'flex items-center gap-2 whitespace-nowrap rounded-[9px] px-3.5 py-1.5 text-[13px] font-medium transition duration-150',
+              active ? 'bg-[#636366] text-white shadow-[0_1px_3px_rgba(0,0,0,.4)]' : 'text-slate-300 hover:text-white',
             )}
           >
             {o.label}
             {o.count !== undefined && (
-              <span className={cn('rounded-md px-1.5 text-xs tabular', active ? 'bg-brand/30 text-white' : 'bg-white/5 text-muted')}>
+              <span className={cn('rounded-full px-1.5 text-xs tabular', active ? 'bg-white/20 text-white' : 'bg-white/[.07] text-muted')}>
                 {o.count}
               </span>
             )}
@@ -264,10 +267,10 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: {
   // Portaled to the page body so it's always centered in the window. See Drawer.
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={onClose} />
-      <div role="dialog" aria-modal className={cn('relative flex max-h-[90vh] w-full animate-pop-in flex-col rounded-2xl border border-line-strong bg-surface shadow-2xl', size === 'lg' ? 'max-w-2xl' : 'max-w-lg')}>
+      <div className="absolute inset-0 bg-black/55 backdrop-blur-md animate-fade-in" onClick={onClose} />
+      <div role="dialog" aria-modal className={cn('relative flex max-h-[90vh] w-full animate-pop-in flex-col rounded-[22px] border border-line/60 bg-surface/95 shadow-[0_24px_80px_rgba(0,0,0,.6)] backdrop-blur-xl', size === 'lg' ? 'max-w-2xl' : 'max-w-lg')}>
         <div className="flex shrink-0 items-start justify-between gap-4 px-6 pt-6">
-          <h3 className="text-lg font-semibold text-white">{title}</h3>
+          <h3 className="text-[22px] font-bold tracking-[-0.02em] text-white">{title}</h3>
           <button onClick={onClose} aria-label="Close dialog" className="-mr-2 -mt-1 rounded-lg p-1.5 text-muted hover:bg-white/5 hover:text-white"><X className="h-5 w-5" /></button>
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">{children}</div>

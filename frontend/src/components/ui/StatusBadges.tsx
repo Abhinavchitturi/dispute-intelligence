@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge } from './kit';
-import { outcomeMeta, priorityMeta, statusMeta, titleCase, Tone } from '../../lib/format';
+import { outcomeMeta, outcomeText, priorityMeta, statusMeta, titleCase, Tone } from '../../lib/format';
 
 export function StatusBadge({ status }: { status: string }) {
   const { label, tone } = statusMeta(status);
@@ -9,7 +9,7 @@ export function StatusBadge({ status }: { status: string }) {
 
 export function OutcomeBadge({ outcome }: { outcome: string | null | undefined }) {
   const m = outcomeMeta(outcome);
-  return m ? <Badge tone={m.tone}>Decided: {m.label.toLowerCase()}</Badge> : null;
+  return m ? <Badge tone={m.tone}>{outcomeText(outcome)}</Badge> : null;
 }
 
 export function EvidenceBadge({ status }: { status: string }) {

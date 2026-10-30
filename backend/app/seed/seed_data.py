@@ -745,6 +745,13 @@ def seed_database(db: Session = None) -> None:
             )
             db.add(hist_obj)
 
+        db.flush()
+        # Hand half of the open cases to the signed-in investigator so "Your cases" has something in it. The rest are unassigned.
+        open_cases = db.query(Dispute).filter(Dispute.status.notin_(["RESOLVED", "CLOSED"])).order_by(Dispute.id).all()
+        for i, case in enumerate(open_cases):
+            if i % 2 == 0:
+                case.assigned_to = "Abhinav Chitturi"
+
         db.commit()
         print(f"Successfully seeded database with 12 disputes, 20 historical cases, transactions, shipments, and evidence.")
 
@@ -762,7 +769,8 @@ if __name__ == "__main__":
 
 # Bump when the meaning of the demo data changes, so databases seeded earlier are refreshed once on startup.
 # v2: cases are seen from PayPal's side (OPEN means nobody has been asked for evidence yet).
-SEED_VERSION = "2"
+# v3: cases have an owner (assigned_to).
+SEED_VERSION = "3"
 
 
 def ensure_seed_current(db: Session) -> str:

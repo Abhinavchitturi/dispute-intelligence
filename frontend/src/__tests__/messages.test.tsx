@@ -44,95 +44,114 @@ describe('server dates', () => {
   });
 });
 
+const detail = (over = {}) => ({ id: 'D-1', source: 'synthetic', status: 'OPEN', merchant_reference: 'TechStore', buyer_reference: 'Alex', seller_settled_at: null, buyer_settled_at: null, evidence_items: [], claim_points: [], ...over });
+const emptySummary = { seller: [], buyer: [], records: [] };
+/** A fetch for one dispute's conversation. Anything it doesn't know about answers with an empty list. */
+const talk = (messages: () => any[], extra: (url: string, init?: RequestInit) => any = () => undefined, disp = detail()) => vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+  const special = extra(url, init);
+  if (special !== undefined) return special;
+  if (url.endsWith('/messages/read')) return ok({ marked_read: 0 });
+  if (url.endsWith('/evidence-summary')) return ok(emptySummary);
+  if (url.endsWith('/messages')) return ok(messages());
+  if (/\/api\/disputes\/D-\d$/.test(url)) return ok(disp);
+  return ok([]);
+}) as any;
+
 describe('MessageThread (PayPal, the seller and the buyer)', () => {
+  it('gives the seller and the buyer their own chat, side by side', async () => {
+    global.fetch = talk(() => [toSeller(), toBuyer()]);
+    render(wrap(<MessageThread disputeId="D-1" disputeStatus="WAITING_FOR_BOTH_RESPONSES" />));
+    const seller = await screen.findByLabelText('Seller conversation');
+    const buyer = screen.getByLabelText('Buyer conversation');
+    // Each side only sees what was sent to them.
+    expect(within(seller).getByText('Evidence needed for dispute D-1')).toBeInTheDocument();
+    expect(within(seller).queryByText('We need more information about your dispute D-1')).not.toBeInTheDocument();
+    expect(within(buyer).getByText('We need more information about your dispute D-1')).toBeInTheDocument();
+    expect(within(buyer).queryByText('Evidence needed for dispute D-1')).not.toBeInTheDocument();
+    // They sit next to each other on a wide screen.
+    expect(seller.closest('div.grid')).toBe(buyer.closest('div.grid'));
+    expect((seller.closest('div.grid') as HTMLElement).className).toMatch(/lg:grid-cols-2/);
+    expect(within(seller).getByText(/Waiting for the/)).toHaveTextContent('seller');
+    expect(within(buyer).getByText(/Waiting for the/)).toHaveTextContent('buyer');
+    expect(within(buyer).getByRole('button', { name: /Simulate buyer reply/i })).toBeInTheDocument();
+    expect(within(seller).queryByRole('button', { name: /Simulate buyer reply/i })).not.toBeInTheDocument();
+  });
+
   it('shows what was asked of the seller and that we are waiting, then the seller\'s reply and that PayPal can decide', async () => {
     let replied = false;
-    global.fetch = vi.fn().mockImplementation((url: string) => {
+    global.fetch = talk(() => (replied ? [toSeller({ awaiting_reply: false }), sellerReply()] : [toSeller()]), (url) => {
       if (url.endsWith('/simulate-reply')) { replied = true; return ok(sellerReply()); }
-      if (url.endsWith('/messages/read')) return ok({ marked_read: 0 });
-      if (url.endsWith('/messages')) return ok(replied ? [toSeller({ awaiting_reply: false }), sellerReply()] : [toSeller()]);
-      return ok([]);
-    }) as any;
-    const onTake = vi.fn();
-    render(wrap(<MessageThread disputeId="D-1" disputeStatus="WAITING_FOR_SELLER_RESPONSE" onTakeAction={onTake} />));
+      return undefined;
+    });
+    render(wrap(<MessageThread disputeId="D-1" disputeStatus="WAITING_FOR_SELLER_RESPONSE" onTakeAction={vi.fn()} />));
 
-    const convo = await screen.findByLabelText('Conversation');
-    expect(within(convo).getByText('You → Seller')).toBeInTheDocument();
+    const convo = await screen.findByLabelText('Seller conversation');
+    expect(within(convo).getByText('PayPal')).toBeInTheDocument();
     expect(within(convo).getByText('Proof of delivery signature')).toBeInTheDocument(); // what PayPal asked for
     expect(within(convo).getByText('Address verification')).toBeInTheDocument();
     expect(within(convo).getByText(/reply by/)).toBeInTheDocument();
     expect(within(convo).getByText(/Waiting for the/)).toHaveTextContent('Waiting for the seller to reply');
     expect(screen.queryByText(/The evidence is in/)).not.toBeInTheDocument();
+    expect(within(screen.getByLabelText('Buyer conversation')).getByText(/Nothing sent to the buyer yet/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Simulate seller reply/i }));
-    await waitFor(() => expect(within(screen.getByLabelText('Conversation')).getByText('Seller → You')).toBeInTheDocument());
-    const c2 = screen.getByLabelText('Conversation');
-    expect(within(c2).getByText('Simulated reply')).toBeInTheDocument();
+    await waitFor(() => expect(within(screen.getByLabelText('Seller conversation')).getByText('Simulated')).toBeInTheDocument());
+    const c2 = screen.getByLabelText('Seller conversation');
     expect(within(c2).getByText('✓ Address verification')).toBeInTheDocument();
     expect(within(c2).getByText(/Couldn't provide: proof of delivery signature/)).toBeInTheDocument();
     expect(screen.queryByText(/Waiting for the/)).not.toBeInTheDocument();
   });
 
-  it('with both sides asked, shows each wait separately with its own simulate button', async () => {
-    global.fetch = vi.fn().mockImplementation((url: string) => (url.endsWith('/messages') ? ok([toSeller(), toBuyer()]) : ok({ marked_read: 0 }))) as any;
-    render(wrap(<MessageThread disputeId="D-1" disputeStatus="WAITING_FOR_BOTH_RESPONSES" />));
-    const waits = await screen.findAllByText(/Waiting for the/);
-    expect(waits.map((w) => w.textContent)).toEqual([expect.stringContaining('seller'), expect.stringContaining('buyer')]);
-    expect(screen.getByRole('button', { name: /Simulate seller reply/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Simulate buyer reply/i })).toBeInTheDocument();
-  });
-
-  it('tells PayPal the evidence is in once every request is answered, and offers to decide', async () => {
-    global.fetch = vi.fn().mockImplementation((url: string) => (url.endsWith('/messages') ? ok([toSeller({ awaiting_reply: false }), sellerReply({ is_read: true })]) : ok({ marked_read: 0 }))) as any;
+  it('tells PayPal the evidence is in once every request is answered, and offers Ready to decide', async () => {
+    global.fetch = talk(() => [toSeller({ awaiting_reply: false }), sellerReply({ is_read: true })]);
     const onTake = vi.fn();
     render(wrap(<MessageThread disputeId="D-1" disputeStatus="UNDER_REVIEW" onTakeAction={onTake} />));
     expect(await screen.findByRole('status')).toHaveTextContent('The evidence is in');
-    fireEvent.click(screen.getByRole('button', { name: /Review and decide/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Ready to decide$/i }));
     expect(onTake).toHaveBeenCalled();
   });
 
-  it('shows a decision once, addressed to both parties, and says how the case ended', async () => {
-    global.fetch = vi.fn().mockImplementation((url: string) => (url.endsWith('/messages')
-      ? ok([toSeller({ awaiting_reply: false }), sellerReply({ is_read: true }), decisionTo('SELLER'), decisionTo('BUYER')]) : ok({ marked_read: 0 }))) as any;
+  it('puts a decision in both chats, and says how the case ended', async () => {
+    global.fetch = talk(() => [toSeller({ awaiting_reply: false }), sellerReply({ is_read: true }), decisionTo('SELLER'), decisionTo('BUYER')]);
     render(wrap(<MessageThread disputeId="D-1" disputeStatus="RESOLVED" outcome="BUYER_FAVOR" />));
-    const convo = await screen.findByLabelText('Conversation');
-    expect(within(convo).getAllByText('You → Seller and buyer')).toHaveLength(1); // one notice, not two
-    expect(within(convo).getByText('Decision')).toBeInTheDocument();
+    const seller = await screen.findByLabelText('Seller conversation');
+    const buyer = screen.getByLabelText('Buyer conversation');
+    for (const chat of [seller, buyer]) {
+      expect(within(chat).getByText('Decision')).toBeInTheDocument();
+      expect(within(chat).getByText(/Decision on dispute D-1/)).toBeInTheDocument();
+    }
     expect(await screen.findByRole('status')).toHaveTextContent("Decided in the buyer's favor");
-    expect(screen.queryByRole('button', { name: /Review and decide/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Ready to decide/i })).not.toBeInTheDocument();
   });
 
-  it('lays the conversation out like a chat: their replies on the left, PayPal\'s messages on the right, a decision in the middle', async () => {
-    global.fetch = vi.fn().mockImplementation((url: string) => (url.endsWith('/messages')
-      ? ok([toSeller({ awaiting_reply: false }), sellerReply({ is_read: true }), toBuyer(), decisionTo('SELLER'), decisionTo('BUYER')]) : ok({ marked_read: 0 }))) as any;
-    render(wrap(<MessageThread disputeId="D-1" disputeStatus="WAITING_FOR_BUYER_RESPONSE" />));
-    const convo = await screen.findByLabelText('Conversation');
-    const row = (text: string) => within(convo).getByText(text).closest('li') as HTMLElement;
+  it('says a decision is with an admin and not yet sent', async () => {
+    global.fetch = talk(() => [toSeller({ awaiting_reply: false }), sellerReply({ is_read: true })]);
+    render(wrap(<MessageThread disputeId="D-1" disputeStatus="PENDING_ADMIN_REVIEW" onTakeAction={vi.fn()} />));
+    expect(await screen.findByRole('status')).toHaveTextContent('Waiting for an admin');
+    expect(screen.queryByRole('button', { name: /Ready to decide/i })).not.toBeInTheDocument();
+  });
 
-    expect(row('You → Seller')).toHaveClass('justify-end');                    // PayPal's request: right
-    expect(row('Seller → You')).toHaveClass('justify-start');                  // the seller's reply: left
-    expect(row('You → Buyer')).toHaveClass('justify-end');                     // PayPal's other request: right
-    expect(row('You → Seller and buyer')).toHaveClass('justify-center');       // a decision addresses both, so it's centred
-    expect(within(convo).getByText(/Waiting for the/).closest('li')).toHaveClass('justify-start'); // the awaited reply will land on the left
-    // Bubbles are narrower than the pane, so the two sides are visibly apart.
-    for (const t of ['You → Seller', 'Seller → You']) expect(row(t).querySelector('article')!.className).toMatch(/md:max-w-\[70%\]/);
+  it('puts PayPal on the right and the party on the left in each chat', async () => {
+    global.fetch = talk(() => [toSeller({ awaiting_reply: false }), sellerReply({ is_read: true }), toBuyer()]);
+    render(wrap(<MessageThread disputeId="D-1" disputeStatus="WAITING_FOR_BUYER_RESPONSE" />));
+    const seller = await screen.findByLabelText('Seller conversation');
+    const row = (chat: HTMLElement, text: string) => within(chat).getByText(text).closest('li') as HTMLElement;
+    expect(row(seller, 'Evidence needed for dispute D-1')).toHaveClass('justify-end');   // PayPal's request: right
+    expect(row(seller, 'Re: Evidence needed for dispute D-1')).toHaveClass('justify-start'); // the seller's reply: left
+    expect(row(screen.getByLabelText('Buyer conversation'), 'We need more information about your dispute D-1')).toHaveClass('justify-end');
+    expect(within(screen.getByLabelText('Buyer conversation')).getByText(/Waiting for the/).closest('li')).toHaveClass('justify-start');
   });
 
   it('marks new replies read and highlights them as New', async () => {
     const calls: string[] = [];
-    global.fetch = vi.fn().mockImplementation((url: string) => {
-      calls.push(url);
-      if (url.endsWith('/messages/read')) return ok({ marked_read: 1 });
-      if (url.endsWith('/messages')) return ok([toSeller({ awaiting_reply: false }), sellerReply()]);
-      return ok([]);
-    }) as any;
+    global.fetch = talk(() => [toSeller({ awaiting_reply: false }), sellerReply()], (url) => { calls.push(url); return url.endsWith('/messages/read') ? ok({ marked_read: 1 }) : undefined; });
     render(wrap(<MessageThread disputeId="D-1" disputeStatus="UNDER_REVIEW" />));
     expect(await screen.findByText('New')).toBeInTheDocument();
     await waitFor(() => expect(calls.some((u) => u.endsWith('/messages/read'))).toBe(true));
   });
 
   it("is honest that real replies aren't synced", async () => {
-    global.fetch = vi.fn().mockImplementation((url: string) => (url.endsWith('/messages') ? ok([toSeller({ source: 'paypal_sandbox', reply_due_at: null })]) : ok([]))) as any;
+    global.fetch = talk(() => [toSeller({ source: 'paypal_sandbox', reply_due_at: null })], undefined, detail({ source: 'paypal_sandbox' }));
     render(wrap(<MessageThread disputeId="D-1" />));
     expect(await screen.findByText(/aren't synced into this app yet/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Simulate/i })).not.toBeInTheDocument();
@@ -143,6 +162,51 @@ describe('MessageThread (PayPal, the seller and the buyer)', () => {
     render(wrap(<MessageThread disputeId="D-1" />));
     expect(await screen.findByText('No messages yet')).toBeInTheDocument();
   });
+
+  describe('settled and withdrawn', () => {
+    const declared: any[] = [];
+    const run = (disp = detail()) => {
+      declared.length = 0;
+      global.fetch = talk(() => [toSeller(), toBuyer()], (url, init) => {
+        if (url.includes('/parties/')) { declared.push({ url, body: JSON.parse(init!.body as string) }); return ok(sellerReply()); }
+        return undefined;
+      }, disp);
+      render(wrap(<MessageThread disputeId="D-1" disputeStatus="WAITING_FOR_BOTH_RESPONSES" />));
+    };
+
+    it('records that the seller says settled, and says it is NOT settled until the buyer agrees', async () => {
+      run(detail({ seller_settled_at: '2026-01-02T10:00:00' }));
+      const status = await screen.findByRole('status');
+      expect(status).toHaveTextContent('The seller says this was settled outside PayPal');
+      expect(status).toHaveTextContent('not settled until the buyer confirms too');
+      expect(within(screen.getByLabelText('Seller chat')).getByText("Says it's settled")).toBeInTheDocument();
+      expect(within(screen.getByLabelText('Buyer chat')).queryByText("Says it's settled")).not.toBeInTheDocument();
+      // The seller has already said it, so they can't say it twice.
+      expect(within(screen.getByLabelText('Demo controls for the seller')).getByRole('button', { name: /Seller says settled/ })).toBeDisabled();
+    });
+
+    it('lets the demo play each side saying settled, and only the buyer withdrawing', async () => {
+      run();
+      fireEvent.click(await screen.findByRole('button', { name: /Seller says settled/ }));
+      await waitFor(() => expect(declared).toHaveLength(1));
+      expect(declared[0].url).toMatch(/\/parties\/SELLER\/declare$/);
+      expect(declared[0].body).toEqual({ kind: 'SETTLED' });
+      fireEvent.click(screen.getByRole('button', { name: /Buyer withdraws claim/ }));
+      await waitFor(() => expect(declared).toHaveLength(2));
+      expect(declared[1].url).toMatch(/\/parties\/BUYER\/declare$/);
+      expect(declared[1].body).toEqual({ kind: 'WITHDRAWN' });
+      expect(within(screen.getByLabelText('Demo controls for the seller')).queryByRole('button', { name: /withdraw/i })).not.toBeInTheDocument();
+    });
+
+    it('says how a settled or dismissed case ended', async () => {
+      global.fetch = talk(() => [toSeller({ awaiting_reply: false })]);
+      const { unmount } = render(wrap(<MessageThread disputeId="D-1" disputeStatus="CLOSED" outcome="SETTLED" />));
+      expect(await screen.findByRole('status')).toHaveTextContent('Settled outside PayPal.');
+      unmount();
+      render(wrap(<MessageThread disputeId="D-1" disputeStatus="CLOSED" outcome="DISMISSED" />));
+      expect(await screen.findByRole('status')).toHaveTextContent('Dismissed, buyer withdrew.');
+    });
+  });
 });
 
 describe('Messages workspace', () => {
@@ -150,24 +214,38 @@ describe('Messages workspace', () => {
     thread({ dispute_id: 'D-1', state: 'WAITING', waiting_on: 'Seller and buyer' }),
     thread({ dispute_id: 'D-2', state: 'YOUR_TURN', waiting_on: null, unread_count: 1, dispute_status: 'UNDER_REVIEW', last_direction: 'INBOUND', last_message_preview: 'Thank you.', pending_message_ids: [] }),
     thread({ dispute_id: 'D-3', state: 'CLOSED', waiting_on: null, dispute_status: 'RESOLVED', outcome: 'BUYER_FAVOR', pending_message_ids: [] }),
+    thread({ dispute_id: 'D-4', state: 'IN_REVIEW', waiting_on: null, dispute_status: 'PENDING_ADMIN_REVIEW', pending_message_ids: [] }),
+    thread({ dispute_id: 'D-5', state: 'CLOSED', waiting_on: null, dispute_status: 'CLOSED', outcome: 'SETTLED', pending_message_ids: [] }),
   ];
   const api = () => vi.fn().mockImplementation((url: string) => {
     if (url.includes('/message-threads')) return ok(threads);
     if (url.endsWith('/evidence-requests/options')) return ok({ seller: [], buyer: [] });
+    if (url.endsWith('/evidence-summary')) return ok(emptySummary);
     if (url.endsWith('/messages')) return ok([toSeller()]);
-    if (/\/api\/disputes\/D-\d$/.test(url)) return ok({ id: 'D-1', status: 'OPEN', evidence_items: [] });
+    if (/\/api\/disputes\/D-\d$/.test(url)) return ok(detail());
     return ok({ marked_read: 0 });
   }) as any;
 
-  it('lists who we are waiting on, which cases are ready to decide, and how decided ones ended', async () => {
+  it('opens on the list of every case you have messaged, not on one conversation', async () => {
     global.fetch = api();
     render(wrap(<MessagesPage />, '/messages'));
     const list = await screen.findByLabelText('Conversations');
+    expect(within(list).getAllByRole('button')).toHaveLength(5);
     expect(within(list).getByText('Waiting on seller and buyer')).toBeInTheDocument();
     expect(within(list).getByText('Ready to decide')).toBeInTheDocument();
+    expect(within(list).getByText('With admin')).toBeInTheDocument();
     expect(within(list).getByText("Decided: buyer's favor")).toBeInTheDocument();
+    expect(within(list).getByText('Settled outside PayPal')).toBeInTheDocument();
     expect(within(list).getByLabelText('1 unread')).toBeInTheDocument();
+    // No conversation is open until you pick one.
+    expect(screen.queryByLabelText('Seller conversation')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Buyer conversation')).not.toBeInTheDocument();
+  });
 
+  it('filters the list by who we are waiting on and which cases are ready to decide', async () => {
+    global.fetch = api();
+    render(wrap(<MessagesPage />, '/messages'));
+    await screen.findByLabelText('Conversations');
     fireEvent.click(screen.getByRole('tab', { name: /^Ready to decide/ }));
     await waitFor(() => {
       const l = screen.getByLabelText('Conversations');
@@ -179,46 +257,46 @@ describe('Messages workspace', () => {
     expect(within(screen.getByLabelText('Conversations')).queryByText('D-2')).not.toBeInTheDocument();
   });
 
-  it('puts the conversation on the left and the list (All / Waiting / Ready to decide) on the right', async () => {
+  it('picking a case shows the seller and the buyer side by side, and the way back to the list', async () => {
     global.fetch = api();
-    render(wrap(<MessagesPage />, '/messages?case=D-2'));
-    const list = (await screen.findByLabelText('Conversations')).closest('[aria-label="Conversation list"]') as HTMLElement;
-    const heading = await screen.findByRole('heading', { name: 'D-2' });
-    const conversation = heading.closest('div.rounded-2xl') as HTMLElement;
-    const grid = list.parentElement as HTMLElement;
+    render(wrap(<MessagesPage />, '/messages'));
+    fireEvent.click(within(await screen.findByLabelText('Conversations')).getByText('D-2'));
+    expect(await screen.findByRole('heading', { name: 'D-2' })).toBeInTheDocument();
+    expect(screen.getByTestId('loc')).toHaveTextContent('/messages?case=D-2');
+    expect(await screen.findByLabelText('Seller conversation')).toBeInTheDocument();
+    expect(screen.getByLabelText('Buyer conversation')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Conversations')).not.toBeInTheDocument(); // the list is replaced, not squeezed beside it
 
-    expect(grid.className).toMatch(/lg:grid-cols-\[1fr_380px\]/);   // wide conversation column, then the narrow list column
-    expect(conversation.className).toMatch(/lg:order-1/);          // conversation first (left) on a wide screen
-    expect(list.className).toMatch(/lg:order-2/);                  // list second (right)
-    expect(within(list).getByRole('tab', { name: /Ready to decide/ })).toBeInTheDocument(); // the tabs live with the list
-    expect(within(conversation).queryByRole('tab')).not.toBeInTheDocument();
-    // On a narrow screen the order is list, then conversation, so you choose before you read.
-    expect(list.compareDocumentPosition(conversation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /All conversations/i }));
+    expect(await screen.findByLabelText('Conversations')).toBeInTheDocument();
+    expect(screen.getByTestId('loc')).toHaveTextContent('/messages');
   });
 
-  it('opens the selected conversation and can jump to the case', async () => {
+  it('opens straight into a conversation from a link, and can jump to the case', async () => {
     global.fetch = api();
     render(wrap(<MessagesPage />, '/messages?case=D-2'));
     expect(await screen.findByRole('heading', { name: 'D-2' })).toBeInTheDocument();
-    expect(screen.getByTestId('loc')).toHaveTextContent('/messages?case=D-2');
     fireEvent.click(screen.getByRole('button', { name: /Open case/i }));
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/investigate/D-2'));
   });
 
-  it('lets PayPal take action right here, without leaving the page, but not on a decided case', async () => {
+  it('lets PayPal take action right here, but not on a decided case or one with an admin', async () => {
     global.fetch = api();
     render(wrap(<MessagesPage />, '/messages?case=D-1'));
     fireEvent.click(await screen.findByRole('button', { name: /^Take action$/i }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('Ask for evidence')).toBeInTheDocument();
-    expect(within(dialog).getByText('Make the call')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Ready to decide' })).toBeInTheDocument();
     expect(screen.getByTestId('loc')).toHaveTextContent('/messages?case=D-1'); // never left the page
     fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/i }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
-    fireEvent.click(within(screen.getByLabelText('Conversations')).getByText('D-3'));
-    await screen.findByRole('heading', { name: 'D-3' });
-    expect(screen.queryByRole('button', { name: /^Take action$/i })).not.toBeInTheDocument();
+    for (const id of ['D-3', 'D-4']) {
+      fireEvent.click(screen.getByRole('button', { name: /All conversations/i }));
+      fireEvent.click(within(await screen.findByLabelText('Conversations')).getByText(id));
+      await screen.findByRole('heading', { name: id });
+      expect(screen.queryByRole('button', { name: /^Take action$/i })).not.toBeInTheDocument();
+    }
   });
 
   it('explains what to do when nothing has been sent', async () => {

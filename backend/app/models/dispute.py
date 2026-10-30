@@ -25,7 +25,19 @@ class Dispute(Base):
     priority_factors_json = Column(Text, nullable=True)
     buyer_claim = Column(Text, nullable=True)
     evidence_status = Column(String(64), default="PENDING")  # COMPLETE, PARTIAL, MISSING, CONFLICTING
-    outcome = Column(String(32), nullable=True)  # set when PayPal decides: BUYER_FAVOR or SELLER_FAVOR
+    outcome = Column(String(32), nullable=True)  # set when PayPal decides: BUYER_FAVOR, SELLER_FAVOR, SETTLED or DISMISSED
+
+    # Who is working the case, and the investigator's proposed decision while an admin reviews it.
+    assigned_to = Column(String(128), nullable=True)
+    proposed_outcome = Column(String(32), nullable=True)    # BUYER_FAVOR or SELLER_FAVOR
+    proposed_reason = Column(Text, nullable=True)
+    proposed_by = Column(String(128), nullable=True)
+    proposed_at = Column(DateTime, nullable=True)
+    review_note = Column(Text, nullable=True)               # the admin's note when sending a case back or overriding
+    reviewed_by = Column(String(128), nullable=True)
+    # Each side can say the dispute was settled outside PayPal. It is only settled when both say so.
+    seller_settled_at = Column(DateTime, nullable=True)
+    buyer_settled_at = Column(DateTime, nullable=True)
 
     # Relationships
     transaction = relationship("Transaction", back_populates="dispute", uselist=False)

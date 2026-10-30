@@ -8,6 +8,9 @@ from backend.app.database import get_db
 from backend.app.models.dispute import Dispute
 from backend.app.schemas.audit import (
     ActionDraftResponse,
+    AdminReviewRequest,
+    AssignRequest,
+    DecisionSubmitRequest,
     ActionExecuteRequest,
     ActionExecuteResponse,
     ActionPreviewRequest,
@@ -17,8 +20,10 @@ from backend.app.services import evidence_catalog as cat
 from backend.app.services.ai_service import AIService
 from backend.app.services.audit_service import AuditService
 from backend.app.services.draft_service import DraftService
+from backend.app.services.decision_service import DecisionError, DecisionService
 from backend.app.services.message_service import (
     CLOSED,
+    PENDING_REVIEW,
     DECISION_ACTIONS,
     OPEN_STATUSES,
     REQUEST_ACTIONS,
@@ -73,7 +78,7 @@ def preview_action(dispute_id: str, request: ActionPreviewRequest, db: Session =
             impact_summary="Action is not recognized.", warning_message="Unsupported action code.", target_environment=settings.RESOLVEIQ_MODE,
         )
 
-    allowed = dispute.status in OPEN_STATUSES
+    allowed = dispute.status in OPEN_STATUSES and not (dispute.status == PENDING_REVIEW and request.action_type in REQUEST_ACTIONS)
     impact = info["impact"]
     if request.action_type in REQUEST_ACTIONS and request.requested_evidence:
         n = len(request.requested_evidence)
@@ -107,6 +112,8 @@ async def execute_action(dispute_id: str, request: ActionExecuteRequest, db: Ses
         raise HTTPException(status_code=400, detail=f"Unsupported action '{action}'.")
     if dispute.status in CLOSED:
         raise HTTPException(status_code=400, detail=f"Dispute is already {dispute.status.lower()}. No further action can be taken.")
+    if dispute.status == PENDING_REVIEW and action in REQUEST_ACTIONS:
+        raise HTTPException(status_code=400, detail="This case is waiting for an admin to review the decision. It has to be reopened before you can ask for more evidence.")
 
     is_sandbox = settings.RESOLVEIQ_MODE == "sandbox" and dispute.source == "paypal_sandbox"
     source = "paypal_sandbox" if is_sandbox else "synthetic"
@@ -150,3 +157,72 @@ async def execute_action(dispute_id: str, request: ActionExecuteRequest, db: Ses
         message=f"Decision sent to the seller and the buyer. The case is resolved in the {'buyer' if outcome == 'BUYER_FAVOR' else 'seller'}'s favor.{suffix}",
         details={"new_status": "RESOLVED", "outcome": outcome},
     )
+
+
+def _is_sandbox(dispute: Dispute) -> bool:
+    return settings.RESOLVEIQ_MODE == "sandbox" and dispute.source == "paypal_sandbox"
+
+
+@router.post("/disputes/{dispute_id}/decision")
+def submit_decision(dispute_id: str, request: DecisionSubmitRequest, db: Session = Depends(get_db)):
+    """The investigator's call. It needs a reason and goes to an admin, who confirms it before anyone is told."""
+    if not request.confirmed:
+        raise HTTPException(status_code=400, detail="Human confirmation required.")
+    dispute = _get_dispute(db, dispute_id)
+    try:
+        DecisionService.propose(db, dispute, request.outcome, request.reason, request.actor or "investigator_user")
+    except DecisionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "proposed_outcome": dispute.proposed_outcome,
+            "message": "Sent to an admin for review. Nobody has been told yet."}
+
+
+@router.post("/disputes/{dispute_id}/admin-review")
+async def admin_review(dispute_id: str, request: AdminReviewRequest, db: Session = Depends(get_db)):
+    """An admin confirms, replaces or sends back the investigator's decision."""
+    if request.role.upper() != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only an admin can review decisions.")
+    dispute = _get_dispute(db, dispute_id)
+    action = request.action.upper()
+    try:
+        if action == "REOPEN":
+            DecisionService.send_back(db, dispute, request.reviewer, request.note or "")
+            return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "message": "Case reopened and sent back to the investigator."}
+        if action not in ("APPROVE", "OVERRIDE"):
+            raise HTTPException(status_code=400, detail="Action must be APPROVE, OVERRIDE or REOPEN.")
+        if dispute.status != PENDING_REVIEW:
+            raise HTTPException(status_code=400, detail="Only a case waiting for admin review can be finalized.")
+        outcome = request.outcome if action == "OVERRIDE" else dispute.proposed_outcome
+        if action == "OVERRIDE" and not (request.note or "").strip():
+            raise HTTPException(status_code=400, detail="Say why you are replacing the investigator's decision.")
+        action_type = "DECIDE_FOR_BUYER" if outcome == "BUYER_FAVOR" else "DECIDE_FOR_SELLER"
+        body, subject = request.message, request.subject
+        if not (body or "").strip():
+            draft = await DraftService.generate(dispute, action_type, None, None)
+            body, subject = draft.body, subject or draft.subject
+            extra = (dispute.proposed_reason if action == "APPROVE" else request.note) or ""
+            if extra:
+                body += f"\n\nINVESTIGATOR REVIEW\n- {extra.strip()}" if action == "APPROVE" else f"\n\nADMIN REVIEW\n- {extra.strip()}"
+        msgs = DecisionService.finalize(db, dispute, request.reviewer, outcome, subject, body, request.note, _is_sandbox(dispute))
+    except DecisionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    side = "buyer" if outcome == "BUYER_FAVOR" else "seller"
+    return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "outcome": dispute.outcome, "message_id": msgs[0].id,
+            "message": f"Resolved in the {side}'s favor. The seller and the buyer have been told."}
+
+
+@router.post("/disputes/{dispute_id}/assign")
+def assign_dispute(dispute_id: str, request: AssignRequest, db: Session = Depends(get_db)):
+    """Take a case (or release it). A case can have one owner at a time."""
+    dispute = _get_dispute(db, dispute_id)
+    if dispute.status in CLOSED:
+        raise HTTPException(status_code=400, detail="This case is closed.")
+    who = (request.assignee or "").strip() or None
+    dispute.assigned_to = who
+    AuditService.record_event(
+        db=db, dispute_id=dispute.id, actor=who or "investigator_user", action="CASE_ASSIGNED" if who else "CASE_RELEASED",
+        status="SUCCESS", source="paypal_sandbox" if _is_sandbox(dispute) else "synthetic",
+        result_summary=f"Case assigned to {who}." if who else "Case released back to the queue.",
+    )
+    db.commit()
+    return {"success": True, "dispute_id": dispute.id, "assigned_to": dispute.assigned_to}

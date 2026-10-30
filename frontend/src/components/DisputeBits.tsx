@@ -1,6 +1,6 @@
 import React from 'react';
 import { Clock } from 'lucide-react';
-import { cn, isClosed, outcomeMeta, priorityMeta, timeLeft } from '../lib/format';
+import { cn, isClosed, outcomeMeta, outcomeText, priorityMeta, timeLeft } from '../lib/format';
 import { Badge, DOT, TEXT } from './ui/kit';
 import { useNow } from '../lib/hooks';
 
@@ -42,7 +42,7 @@ export function Countdown({ due, className }: { due: string | null; className?: 
 export function DecideBy({ status, due, outcome, className }: { status: string; due: string | null; outcome?: string | null; className?: string }) {
   if (isClosed(status)) {
     const o = outcomeMeta(outcome);
-    return <Badge tone={o?.tone ?? 'success'} className={className}>{o ? `Decided: ${o.label.toLowerCase()}` : 'Closed'}</Badge>;
+    return <Badge tone={o?.tone ?? 'success'} className={className}>{outcomeText(outcome) ?? 'Closed'}</Badge>;
   }
   return <Countdown due={due} className={className} />;
 }

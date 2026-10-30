@@ -33,7 +33,7 @@ class ThreadSummary(BaseModel):
     amount: float
     currency: str
     dispute_status: str
-    state: str                       # "WAITING" (a party owes us a reply), "YOUR_TURN" (PayPal must act), "CLOSED"
+    state: str                       # "WAITING" (a party owes us a reply), "YOUR_TURN" (PayPal must act), "IN_REVIEW" (an admin is checking the decision), "CLOSED"
     waiting_on: Optional[str] = None # "Seller", "Buyer" or "Seller and buyer" when state is WAITING
     last_message_preview: str
     last_message_at: datetime
@@ -45,3 +45,4 @@ class ThreadSummary(BaseModel):
     simulated: bool
     pending_message_ids: List[str] = []
     outcome: Optional[str] = None
+    assigned_to: Optional[str] = None

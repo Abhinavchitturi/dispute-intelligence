@@ -1,23 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ArrowLeft, ArrowRight, Check, Gavel, Info, Send, Store, ThumbsDown, ThumbsUp, User } from 'lucide-react';
-import { draftActionMessage, executeAction, fetchDisputeDetail, fetchEvidenceOptions, previewAction } from '../api/client';
+import { draftActionMessage, executeAction, fetchDisputeDetail, fetchEvidenceOptions, previewAction, submitDecision } from '../api/client';
+import { EvidenceChecklist } from './EvidenceChecklist';
+import { ClaimPoints } from './ClaimPoints';
+import { useCurrentUser } from '../lib/user';
 import { ActionExecuteResult, EvidenceBalance, EvidenceRequestOption } from '../types';
 import { Badge, Button, Field, Modal, Select, Skeleton, Textarea, useToast } from './ui/kit';
 import { cn, titleCase } from '../lib/format';
 
-type Group = 'ask' | 'decide';
 export const ACTIONS = [
-  { value: 'REQUEST_SELLER_EVIDENCE', group: 'ask' as Group, label: 'Ask the seller for evidence', hint: 'Request documents that back up their side', icon: Store },
-  { value: 'REQUEST_BUYER_EVIDENCE', group: 'ask' as Group, label: 'Ask the buyer for evidence', hint: 'Request footage, photos or a statement', icon: User },
-  { value: 'DECIDE_FOR_BUYER', group: 'decide' as Group, label: "Decide in the buyer's favor", hint: 'Refund the buyer, taken from the seller', icon: ThumbsUp },
-  { value: 'DECIDE_FOR_SELLER', group: 'decide' as Group, label: "Decide in the seller's favor", hint: 'No refund, the seller keeps the payment', icon: ThumbsDown },
+  { value: 'REQUEST_SELLER_EVIDENCE', label: 'Ask the seller for evidence', hint: 'Request documents that back up their side', icon: Store },
+  { value: 'REQUEST_BUYER_EVIDENCE', label: 'Ask the buyer for evidence', hint: 'Request footage, photos or a statement', icon: User },
 ] as const;
 export type ActionValue = (typeof ACTIONS)[number]['value'];
 
 const STEPS = ['Choose', 'Message', 'Review'] as const;
 const DECISION_STEPS = ['Choose', 'Decide'] as const;
-const isRequest = (a: ActionValue) => a === 'REQUEST_SELLER_EVIDENCE' || a === 'REQUEST_BUYER_EVIDENCE';
+const MIN_REASON = 10;
 const partyOf = (a: ActionValue) => (a === 'REQUEST_SELLER_EVIDENCE' ? 'seller' : 'buyer');
 
 export interface ActionResult { message: string; env: string; audit: string }
@@ -27,7 +27,8 @@ const HINTS: Record<string, string> = {
   WAITING_FOR_SELLER_RESPONSE: 'Waiting on the seller. You can ask more, or decide with what you have.',
   WAITING_FOR_BUYER_RESPONSE: 'Waiting on the buyer. You can ask more, or decide with what you have.',
   WAITING_FOR_BOTH_RESPONSES: 'Waiting on the seller and the buyer. You can ask more, or decide with what you have.',
-  UNDER_REVIEW: 'All requested evidence is in. Review it, then decide.',
+  UNDER_REVIEW: 'The evidence is in, or the reply deadline has passed. Review what you have and decide.',
+  PENDING_ADMIN_REVIEW: 'A decision on this case is with an admin. It has to be reopened before you can act.',
 };
 
 /** Where the case stands, in a sentence. One concrete document on file is enough to decide, so say so. */
@@ -41,14 +42,13 @@ function hintFor(status: string, onFile: number): string | undefined {
 }
 
 /**
- * One message PayPal might send: its evidence checklist (for requests), its draft, and the investigator's edits to it.
- * The wizard holds one of these per possible action, so asking the seller and the buyer together keeps them independent.
+ * One evidence request PayPal might send: its checklist, its draft, and the investigator's edits to it.
+ * The wizard holds one of these per party, so asking the seller and the buyer together keeps them independent.
  */
 function useActionDraft({ disputeId, action, active, step, open, days, choices }: {
   disputeId: string; action: ActionValue; active: boolean; step: number; open: boolean; days: number; choices?: EvidenceRequestOption[];
 }) {
   const toast = useToast();
-  const request = isRequest(action);
   const [picked, setPicked] = useState<string[] | undefined>();
   const [edit, setEdit] = useState<string | undefined>();
   useEffect(() => { if (open) { setPicked(undefined); setEdit(undefined); } }, [open]);
@@ -60,9 +60,9 @@ function useActionDraft({ disputeId, action, active, step, open, days, choices }
   const toggle = (t: string) => { resetForChange(); setPicked(chosen.includes(t) ? chosen.filter((x) => x !== t) : [...chosen, t]); };
 
   const draft = useQuery({
-    queryKey: ['actionDraft', disputeId, action, request ? [...chosen].sort().join(',') : '', request ? days : 0],
-    queryFn: () => draftActionMessage(disputeId, { action_type: action, requested_evidence: request ? chosen : undefined, deadline_days: request ? days : undefined }),
-    enabled: open && active && step >= 1 && (!request || !!choices),
+    queryKey: ['actionDraft', disputeId, action, [...chosen].sort().join(','), days],
+    queryFn: () => draftActionMessage(disputeId, { action_type: action, requested_evidence: chosen, deadline_days: days }),
+    enabled: open && active && step >= 1 && !!choices,
     staleTime: 60_000,
     placeholderData: keepPreviousData, // keep showing the last draft while a new one loads, so the box doesn't flicker away
   });
@@ -71,7 +71,7 @@ function useActionDraft({ disputeId, action, active, step, open, days, choices }
   const loading = draft.isLoading || draft.isPlaceholderData || holdingOther;
   const message = edit ?? (draft.data && !holdingOther ? draft.data.body : '');
 
-  return { action, request, chosen, toggle, draft, loading, message, edit, setEdit, resetEdit: () => setEdit(undefined), resetForChange, choicesReady: !request || !!choices };
+  return { action, chosen, toggle, draft, loading, message, edit, setEdit, resetEdit: () => setEdit(undefined), resetForChange, choicesReady: !!choices };
 }
 type Slot = ReturnType<typeof useActionDraft>;
 
@@ -79,8 +79,8 @@ function useActionPreview({ disputeId, slot, active, enabled, open, days, notes 
   disputeId: string; slot: Slot; active: boolean; enabled: boolean; open: boolean; days: number; notes: string;
 }) {
   return useQuery({
-    queryKey: ['actionPreview', disputeId, slot.action, slot.request ? slot.chosen.length : 0, slot.request ? days : 0],
-    queryFn: () => previewAction(disputeId, { action_type: slot.action, notes, requested_evidence: slot.request ? slot.chosen : undefined, deadline_days: slot.request ? days : undefined }),
+    queryKey: ['actionPreview', disputeId, slot.action, slot.chosen.length, days],
+    queryFn: () => previewAction(disputeId, { action_type: slot.action, notes, requested_evidence: slot.chosen, deadline_days: days }),
     enabled: open && active && enabled,
     staleTime: 0,
   });
@@ -115,38 +115,45 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
 }) {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const { user } = useCurrentUser();
   const [step, setStep] = useState(0);
-  // Asking can be combined (seller and buyer together). A decision stands alone, because it closes the case.
+  // Asking can be combined (seller and buyer together). Deciding is its own page, reached with "Ready to decide".
   const [selected, setSelected] = useState<ActionValue[]>(['REQUEST_SELLER_EVIDENCE']);
+  const [deciding, setDeciding] = useState(false);
   const [days, setDays] = useState(5);
   const [notes, setNotes] = useState('');
+  const [reason, setReason] = useState('');
   const [reviewed, setReviewed] = useState(false);
 
-  useEffect(() => { if (open) { setStep(0); setSelected(['REQUEST_SELLER_EVIDENCE']); setDays(5); setNotes(''); setReviewed(false); } }, [open]);
+  useEffect(() => { if (open) { setStep(0); setSelected(['REQUEST_SELLER_EVIDENCE']); setDeciding(false); setDays(5); setNotes(''); setReason(''); setReviewed(false); } }, [open]);
 
   const wantsSeller = selected.includes('REQUEST_SELLER_EVIDENCE');
   const wantsBuyer = selected.includes('REQUEST_BUYER_EVIDENCE');
-  const decision = selected.find((a) => !isRequest(a)) ?? null;
 
   const detail = useQuery({ queryKey: ['disputeDetail', disputeId], queryFn: () => fetchDisputeDetail(disputeId), enabled: open });
-  const options = useQuery({ queryKey: ['evidenceOptions', disputeId], queryFn: () => fetchEvidenceOptions(disputeId), enabled: open && (wantsSeller || wantsBuyer) });
+  const options = useQuery({ queryKey: ['evidenceOptions', disputeId], queryFn: () => fetchEvidenceOptions(disputeId), enabled: open && !deciding && (wantsSeller || wantsBuyer) });
+  // The "how the evidence stacks up" facts come with a decision draft. The draft's wording isn't used: an admin sends the notice.
+  const balance = useQuery({
+    queryKey: ['decisionBalance', disputeId],
+    queryFn: () => draftActionMessage(disputeId, { action_type: 'DECIDE_FOR_BUYER' }),
+    enabled: open && deciding,
+  });
 
   const base = { disputeId, step, open, days };
-  const seller = useActionDraft({ ...base, action: 'REQUEST_SELLER_EVIDENCE', active: wantsSeller, choices: options.data?.seller });
-  const buyer = useActionDraft({ ...base, action: 'REQUEST_BUYER_EVIDENCE', active: wantsBuyer, choices: options.data?.buyer });
-  const decide = useActionDraft({ ...base, action: decision ?? 'DECIDE_FOR_BUYER', active: !!decision });
+  const seller = useActionDraft({ ...base, action: 'REQUEST_SELLER_EVIDENCE', active: wantsSeller && !deciding, choices: options.data?.seller });
+  const buyer = useActionDraft({ ...base, action: 'REQUEST_BUYER_EVIDENCE', active: wantsBuyer && !deciding, choices: options.data?.buyer });
 
-  const slots: Slot[] = decision ? [decide] : [...(wantsSeller ? [seller] : []), ...(wantsBuyer ? [buyer] : [])];
+  const slots: Slot[] = [...(wantsSeller ? [seller] : []), ...(wantsBuyer ? [buyer] : [])];
   const multi = slots.length > 1;
-  const steps = decision ? DECISION_STEPS : STEPS;
+  const steps = deciding ? DECISION_STEPS : STEPS;
   const lastStep = steps.length - 1;
 
-  // A decision is previewed on its single step. A request is previewed on the last of its three.
-  const previewStep = decision ? 1 : 2;
-  const previewSeller = useActionPreview({ disputeId, slot: seller, active: wantsSeller && !decision, enabled: step === previewStep, open, days, notes });
-  const previewBuyer = useActionPreview({ disputeId, slot: buyer, active: wantsBuyer && !decision, enabled: step === previewStep, open, days, notes });
-  const previewDecide = useActionPreview({ disputeId, slot: decide, active: !!decision, enabled: step === previewStep, open, days, notes });
-  const previews = decision ? [previewDecide] : [...(wantsSeller ? [previewSeller] : []), ...(wantsBuyer ? [previewBuyer] : [])];
+  const previewSeller = useActionPreview({ disputeId, slot: seller, active: wantsSeller && !deciding, enabled: step === 2, open, days, notes });
+  const previewBuyer = useActionPreview({ disputeId, slot: buyer, active: wantsBuyer && !deciding, enabled: step === 2, open, days, notes });
+  const previews = [...(wantsSeller ? [previewSeller] : []), ...(wantsBuyer ? [previewBuyer] : [])];
+
+  const invalidate = () => ['disputeDetail', 'disputeTimeline', 'dashboardSummary', 'disputes', 'urgentDisputes', 'auditEvents', 'messageThreads', 'disputeMessages', 'evidenceOptions', 'evidenceSummary']
+    .forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
 
   const execute = useMutation({
     mutationFn: async () => {
@@ -155,7 +162,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
         try {
           done.push(await executeAction(disputeId, {
             action_type: s.action, confirmed: true, message: s.message, subject: s.draft.data?.subject, notes,
-            requested_evidence: s.request ? s.chosen : undefined, deadline_days: s.request ? days : undefined,
+            requested_evidence: s.chosen, deadline_days: days,
           }));
         } catch (e) {
           // Don't hide that the first one already went out.
@@ -174,55 +181,63 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
     },
     onError: (e: Error) => { toast('error', `Action failed: ${e.message}`); invalidate(); },
   });
-  const invalidate = () => ['disputeDetail', 'disputeTimeline', 'dashboardSummary', 'disputes', 'urgentDisputes', 'auditEvents', 'messageThreads', 'disputeMessages', 'evidenceOptions']
-    .forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+
+  const decide = useMutation({
+    mutationFn: (outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR') => submitDecision(disputeId, { outcome, reason: reason.trim(), actor: user.name }),
+    onSuccess: (r) => {
+      onDone({ message: r.message, env: 'demo', audit: 'Decision submitted' });
+      toast('success', r.message);
+      invalidate();
+      onClose();
+    },
+    onError: (e: Error) => { toast('error', `Couldn't send the decision: ${e.message}`); invalidate(); },
+  });
 
   const pick = (a: ActionValue) => setSelected((cur) => {
-    if (!isRequest(a)) return [a];                        // choosing a decision replaces everything
-    const asks = cur.filter(isRequest);                   // choosing to ask drops any decision
-    if (asks.includes(a)) return asks.length > 1 ? asks.filter((x) => x !== a) : asks; // always keep at least one
-    return ACTIONS.map((x) => x.value).filter((v) => isRequest(v) && (asks.includes(v) || v === a)); // stable order: seller, then buyer
+    if (cur.includes(a)) return cur.length > 1 ? cur.filter((x) => x !== a) : cur; // always keep at least one
+    return ACTIONS.map((x) => x.value).filter((v) => cur.includes(v) || v === a);   // stable order: seller, then buyer
   });
   const changeDays = (d: number) => { slots.forEach((s) => s.resetForChange()); setDays(d); };
+  const readyToDecide = () => { setDeciding(true); setStep(1); };
+  const back = () => { if (deciding && step === 1) setDeciding(false); setStep(step - 1); };
 
   const onFileCount = detail.data?.evidence_items.filter((e) => e.availability_status === 'AVAILABLE').length ?? 0;
   const hint = detail.data ? hintFor(detail.data.status, onFileCount) : undefined;
-  const canContinue = step === 0 || (step === 1 && slots.every((s) => s.choicesReady && !s.loading && !!s.message.trim() && (!s.request || s.chosen.length > 0)));
+  const inReview = detail.data?.status === 'PENDING_ADMIN_REVIEW';
+  const canContinue = step === 0 || (step === 1 && slots.every((s) => s.choicesReady && !s.loading && !!s.message.trim() && s.chosen.length > 0));
   const previewsOk = previews.every((p) => !!p.data?.is_supported && !p.isLoading);
-  const canSend = previewsOk && (!decision || (reviewed && !!decide.message.trim() && !decide.loading));
+  const reasonOk = reason.trim().length >= MIN_REASON;
+  const canDecide = reviewed && reasonOk && !decide.isPending;
 
-  const nextLabel = step === 0 ? (decision ? 'Next: review decision' : multi ? 'Next: write messages' : 'Next: write message') : 'Next: review';
+  const nextLabel = step === 0 ? (multi ? 'Next: write messages' : 'Next: write message') : 'Next: review';
   const footer = (
     <>
-      {step > 0 ? <Button onClick={() => setStep(step - 1)} className="mr-auto"><ArrowLeft className="h-4 w-4" />Back</Button> : <span className="mr-auto" />}
+      {step > 0 ? <Button onClick={back} className="mr-auto"><ArrowLeft className="h-4 w-4" />Back</Button> : <span className="mr-auto" />}
       <Button variant="ghost" onClick={onClose}>Cancel</Button>
-      {step < lastStep ? (
-        <Button variant="primary" disabled={!canContinue} onClick={() => setStep(step + 1)}>{nextLabel}<ArrowRight className="h-4 w-4" /></Button>
+      {!deciding && (step < lastStep ? (
+        <Button variant="primary" disabled={!canContinue || inReview} onClick={() => setStep(step + 1)}>{nextLabel}<ArrowRight className="h-4 w-4" /></Button>
       ) : (
-        <Button variant={decision ? 'danger' : 'primary'} loading={execute.isPending} disabled={!canSend} onClick={() => execute.mutate()}>
-          {decision ? <Gavel className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-          {decision ? 'Confirm decision' : multi ? `Send ${slots.length} requests` : 'Send request'}
+        <Button variant="primary" loading={execute.isPending} disabled={!previewsOk} onClick={() => execute.mutate()}>
+          <Send className="h-4 w-4" />{multi ? `Send ${slots.length} requests` : 'Send request'}
         </Button>
-      )}
+      ))}
     </>
   );
 
   const card = (a: (typeof ACTIONS)[number]) => {
     const active = selected.includes(a.value);
-    const ask = isRequest(a.value);
     return (
       <button
-        key={a.value} role={ask ? 'checkbox' : 'radio'} aria-checked={active} onClick={() => pick(a.value)}
-        className={cn('relative flex items-start gap-3 rounded-xl border p-4 text-left transition', active ? 'border-brand bg-brand/10' : 'border-line bg-raised/40 hover:border-line-strong')}
+        key={a.value} role="checkbox" aria-checked={active} onClick={() => pick(a.value)}
+        className={cn('relative flex items-start gap-3 rounded-2xl border p-4 text-left transition', active ? 'border-brand bg-brand/10' : 'border-line bg-raised/40 hover:border-line-strong')}
       >
-        <span className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-lg', active ? 'bg-brand text-white' : 'bg-white/5 text-muted')}><a.icon className="h-[18px] w-[18px]" /></span>
+        <span className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl', active ? 'bg-brand text-white' : 'bg-white/5 text-muted')}><a.icon className="h-[18px] w-[18px]" /></span>
         <span className="pr-6">
           <span className="block text-sm font-medium text-white">{a.label}</span>
           <span className="mt-0.5 block text-xs text-muted">{a.hint}</span>
         </span>
-        {/* Asking is a tick box (pick several). Deciding is a round dot (pick one). */}
-        <span aria-hidden className={cn('absolute right-3 top-3 grid h-5 w-5 place-items-center border text-white', ask ? 'rounded-md' : 'rounded-full', active ? 'border-brand bg-brand' : 'border-line-strong')}>
-          {active && (ask ? <Check className="h-3.5 w-3.5" /> : <span className="h-2 w-2 rounded-full bg-white" />)}
+        <span aria-hidden className={cn('absolute right-3 top-3 grid h-5 w-5 place-items-center rounded-md border text-white', active ? 'border-brand bg-brand' : 'border-line-strong')}>
+          {active && <Check className="h-3.5 w-3.5" />}
         </span>
       </button>
     );
@@ -231,7 +246,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
   const checklist = (s: Slot) => {
     const party = partyOf(s.action);
     return (
-      <section aria-label={multi ? `What to ask the ${party} for` : 'What to ask for'} className="rounded-xl border border-brand/25 bg-brand/[.06] p-4">
+      <section aria-label={multi ? `What to ask the ${party} for` : 'What to ask for'} className="rounded-2xl border border-brand/25 bg-brand/[.06] p-4">
         <h3 className="text-sm font-semibold text-white">What do you need from the {party}?</h3>
         <p className="mt-0.5 text-xs text-muted">Pick what to ask for. Items already on file are marked.</p>
         {!options.data ? <Skeleton className="mt-3 h-24" /> : (
@@ -240,13 +255,13 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
               const on = s.chosen.includes(o.evidence_type);
               return (
                 <li key={o.evidence_type}>
-                  <label className={cn('flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition', on ? 'border-brand/50 bg-brand/10' : 'border-line bg-raised/40 hover:border-line-strong')}>
-                    <input type="checkbox" checked={on} onChange={() => s.toggle(o.evidence_type)} aria-label={multi ? `${o.label} (${party})` : o.label} className="mt-1 h-4 w-4 accent-[#6D7CFF]" />
+                  <label className={cn('flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2.5 transition', on ? 'border-brand/50 bg-brand/10' : 'border-line bg-raised/40 hover:border-line-strong')}>
+                    <input type="checkbox" checked={on} onChange={() => s.toggle(o.evidence_type)} aria-label={multi ? `${o.label} (${party})` : o.label} className="mt-1 h-4 w-4 accent-[#0A84FF]" />
                     <span className="min-w-0 flex-1">
                       <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-white">
                         {o.label}
                         {o.on_file && <Badge tone="success">On file</Badge>}
-                        {!o.on_file && o.suggested && <Badge tone="warn">Missing</Badge>}
+                        {!o.on_file && o.suggested && <Badge tone="danger">Missing</Badge>}
                       </span>
                       <span className="block text-xs text-muted">{o.on_file && o.on_file_description ? o.on_file_description : o.why}</span>
                     </span>
@@ -261,7 +276,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
   };
 
   const draftBox = (s: Slot) => {
-    const party = s.request ? partyOf(s.action) : null;
+    const party = partyOf(s.action);
     const d = s.draft.data;
     const wrongAction = !!d && d.action_type !== s.action;
     return (
@@ -329,39 +344,40 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
           {hint && (
             <p className="flex items-start gap-2 rounded-xl border border-line bg-raised/50 px-3 py-2.5 text-[13px] text-slate-300"><Info className="mt-0.5 h-4 w-4 shrink-0 text-brand-soft" />{hint}</p>
           )}
+          {detail.data?.review_note && detail.data.status === 'UNDER_REVIEW' && (
+            <p role="note" className="rounded-xl border border-amber-400/25 bg-amber-400/[.07] px-3 py-2.5 text-[13px] text-amber-100">
+              <span className="font-semibold">{detail.data.reviewed_by ?? 'An admin'} sent this back:</span> {detail.data.review_note}
+            </p>
+          )}
           <div>
             <h3 className="mb-2 flex items-baseline justify-between text-xs font-semibold uppercase tracking-wider text-muted">
               Ask for evidence <span className="font-normal normal-case tracking-normal">Pick one or both</span>
             </h3>
-            <div role="group" aria-label="Ask for evidence" className="grid gap-3 sm:grid-cols-2">{ACTIONS.filter((a) => a.group === 'ask').map(card)}</div>
+            <div role="group" aria-label="Ask for evidence" className="grid gap-3 sm:grid-cols-2">{ACTIONS.map(card)}</div>
           </div>
-          <div>
-            <h3 className="mb-2 flex items-baseline justify-between text-xs font-semibold uppercase tracking-wider text-muted">
-              Make the call <span className="font-normal normal-case tracking-normal">Pick one. It closes the case</span>
-            </h3>
-            <div role="radiogroup" aria-label="Make the call" className="grid gap-3 sm:grid-cols-2">{ACTIONS.filter((a) => a.group === 'decide').map(card)}</div>
+          {/* Deciding is a different kind of step, so it doesn't sit among the choices. */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+            <p className="max-w-sm text-[13px] text-muted">Have what you need? Review everything on file and make your call. An admin confirms it before anyone is told.</p>
+            <Button onClick={readyToDecide} disabled={inReview}><Gavel className="h-4 w-4" />Ready to decide</Button>
           </div>
         </div>
       )}
 
-      {step === 1 && (
+      {step === 1 && !deciding && (
         <div className="space-y-5 animate-fade-in">
-          {!decision && (
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-muted">{multi ? 'Both messages use the same reply deadline.' : 'Set how long they have to reply.'}</p>
-              <div className="w-56 shrink-0">
-                <Select aria-label="Reply within" value={days} onChange={(e) => changeDays(Number(e.target.value))} className="py-1.5 text-[13px]">
-                  {[2, 3, 5, 7, 10].map((d) => <option key={d} value={d}>Reply within {d} days</option>)}
-                </Select>
-              </div>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted">{multi ? 'Both messages use the same reply deadline.' : 'Set how long they have to reply.'}</p>
+            <div className="w-56 shrink-0">
+              <Select aria-label="Reply within" value={days} onChange={(e) => changeDays(Number(e.target.value))} className="py-1.5 text-[13px]">
+                {[2, 3, 5, 7, 10].map((d) => <option key={d} value={d}>Reply within {d} days</option>)}
+              </Select>
             </div>
-          )}
+          </div>
 
           {slots.map((s) => (
             <div key={s.action} className={cn('space-y-4', multi && 'rounded-2xl border border-line p-4')}>
               {multi && <h3 className="flex items-center gap-2 text-sm font-semibold text-white">{s.action === 'REQUEST_SELLER_EVIDENCE' ? <Store className="h-4 w-4 text-brand-soft" /> : <User className="h-4 w-4 text-brand-soft" />}To the {partyOf(s.action)}</h3>}
-              {s.request && checklist(s)}
-              {!s.request && s.draft.data?.evidence_balance && s.draft.data.action_type === s.action && <BalancePanel balance={s.draft.data.evidence_balance} />}
+              {checklist(s)}
               {draftBox(s)}
             </div>
           ))}
@@ -369,28 +385,41 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
           <Field label="Internal note (optional)">
             <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Only visible to your team. Why this action?" />
           </Field>
-
-          {/* A decision is confirmed right here, so it takes two steps instead of three. */}
-          {decision && (
-            <section aria-label="Confirm decision" className="space-y-3 border-t border-line pt-4">
-              {previewDecide.isLoading ? <Skeleton className="h-10" /> : previewDecide.data && (
-                <>
-                  <p className="text-sm text-slate-300"><span className="font-medium text-white">What happens: </span>{previewDecide.data.impact_summary}</p>
-                  {!previewDecide.data.is_supported && previewDecide.data.warning_message && (
-                    <p className="flex gap-2 text-sm text-rose-300"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{previewDecide.data.warning_message}</p>
-                  )}
-                </>
-              )}
-              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-raised/40 p-3 text-sm text-slate-200">
-                <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#6D7CFF]" />
-                <span>I've reviewed the evidence on file and I'm making this decision.</span>
-              </label>
-            </section>
-          )}
         </div>
       )}
 
-      {step === 2 && !decision && (
+      {step === 1 && deciding && (
+        <div className="space-y-5 animate-fade-in">
+          {detail.data && <ClaimPoints points={detail.data.claim_points} />}
+          <EvidenceChecklist disputeId={disputeId} title="Evidence on this case" />
+          {balance.isLoading ? <Skeleton className="h-28" /> : balance.data?.evidence_balance && <BalancePanel balance={balance.data.evidence_balance} />}
+
+          <section aria-label="Your decision" className="space-y-3 border-t border-line pt-5">
+            <Field label="Why are you deciding this way?">
+              <Textarea
+                rows={4} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Reason for your decision"
+                placeholder="For example: the carrier confirmed delivery to the address on the order, and the buyer sent no footage."
+              />
+            </Field>
+            <p className="flex gap-2 text-xs text-muted"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />Your reason goes to an admin with your decision. The seller and the buyer are told only after the admin confirms it. The admin can send it back.</p>
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-raised/40 p-3 text-sm text-slate-200">
+              <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#0A84FF]" />
+              <span>I've reviewed the evidence on file and I'm making this decision.</span>
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Button variant="primary" loading={decide.isPending && decide.variables === 'BUYER_FAVOR'} disabled={!canDecide} onClick={() => decide.mutate('BUYER_FAVOR')}>
+                <ThumbsUp className="h-4 w-4" />Buyer's favor
+              </Button>
+              <Button variant="primary" loading={decide.isPending && decide.variables === 'SELLER_FAVOR'} disabled={!canDecide} onClick={() => decide.mutate('SELLER_FAVOR')}>
+                <ThumbsDown className="h-4 w-4" />Seller's favor
+              </Button>
+            </div>
+            {!reasonOk && reason.length > 0 && <p className="text-xs text-amber-300">Add a little more. The admin needs to see your reasoning.</p>}
+          </section>
+        </div>
+      )}
+
+      {step === 2 && !deciding && (
         <div className="space-y-5 animate-fade-in">
           {slots.map((s, i) => {
             const p = previews[i];

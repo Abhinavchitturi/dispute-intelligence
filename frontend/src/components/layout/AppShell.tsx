@@ -6,8 +6,8 @@ import { fetchHealth, fetchMessageThreads } from '../../api/client';
 import { cn } from '../../lib/format';
 import { useStoredState } from '../../lib/hooks';
 import { CommandPalette } from './CommandPalette';
-import { PAGES } from './pages';
-import { CURRENT_USER, initials } from '../../lib/user';
+import { PAGES, visibleTo } from './pages';
+import { initials, useCurrentUser } from '../../lib/user';
 import { Badge } from '../ui/kit';
 
 const GROUPS: { id: string; label: string }[] = [
@@ -20,6 +20,7 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useStoredState('resolveiq.sidebar.collapsed', false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const location = useLocation();
+  const { role, setRole, user } = useCurrentUser();
 
   const { data: health, isError } = useQuery({
     queryKey: ['health'],
@@ -46,9 +47,9 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas text-slate-100">
-      <aside className={cn('flex shrink-0 flex-col border-r border-line bg-surface transition-[width] duration-200', collapsed ? 'w-[68px]' : 'w-60')}>
+      <aside className={cn('flex shrink-0 flex-col border-r border-line/70 bg-surface/80 backdrop-blur-2xl transition-[width] duration-200', collapsed ? 'w-[68px]' : 'w-60')}>
         <div className={cn('flex h-16 items-center gap-3 border-b border-line', collapsed ? 'justify-center' : 'px-5')}>
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand to-violet-500 shadow-lg shadow-brand/30">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-brand">
             <ShieldCheck className="h-5 w-5 text-white" />
           </div>
           {!collapsed && (
@@ -63,18 +64,21 @@ export function AppShell() {
           {GROUPS.map((g) => (
             <div key={g.id} className="space-y-1">
               {!collapsed && <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">{g.label}</div>}
-              {PAGES.filter((p) => p.group === g.id).map((p) => (
+              {PAGES.filter((p) => p.group === g.id && visibleTo(p, role)).map((p) => (
                 <NavLink
                   key={p.to}
                   to={p.to}
                   end={p.to === '/'}
                   title={collapsed ? p.name : undefined}
                   className={({ isActive }) => {
-                    const active = isActive || (p.to === '/investigate' && isCase);
+                    // "Your cases" and "Disputes" are the same page with a different filter, so tell them apart by the filter.
+                    const [path, query] = p.to.split('?');
+                    const onQuery = location.pathname === path && !!query && location.search.includes(query);
+                    const active = query ? onQuery : (isActive && !(p.to === '/queue' && location.search.includes('view=mine'))) || (p.to === '/investigate' && isCase);
                     return cn(
-                      'group relative flex items-center gap-3 rounded-xl py-2.5 text-sm font-medium transition',
+                      'group relative flex items-center gap-3 rounded-[10px] py-2.5 text-[15px] font-medium transition',
                       collapsed ? 'justify-center px-0' : 'px-3',
-                      active ? 'bg-brand/15 text-white ring-1 ring-brand/25' : 'text-muted hover:bg-white/5 hover:text-white',
+                      active ? 'bg-brand/20 text-white ring-1 ring-brand/30' : 'text-slate-300 hover:bg-white/[.06] hover:text-white',
                     );
                   }}
                 >
@@ -106,7 +110,7 @@ export function AppShell() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center gap-4 border-b border-line bg-canvas/80 px-6 backdrop-blur">
+        <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center gap-4 border-b border-line/70 bg-canvas/70 px-6 backdrop-blur-2xl">
           <button
             onClick={() => setPaletteOpen(true)}
             className="group flex h-10 w-full max-w-md items-center gap-3 rounded-xl border border-line-strong bg-surface px-3 text-sm text-muted transition hover:border-brand/50"
@@ -117,13 +121,23 @@ export function AppShell() {
           </button>
 
           <div className="ml-auto flex items-center gap-3">
+            <div role="group" aria-label="Signed in as" className="flex rounded-full bg-raised/80 p-0.5 text-xs font-medium">
+              {(['investigator', 'admin'] as const).map((r) => (
+                <button
+                  key={r} aria-pressed={role === r} onClick={() => setRole(r)}
+                  className={cn('rounded-full px-3 py-1 transition', role === r ? 'bg-[#636366] text-white shadow-[0_1px_3px_rgba(0,0,0,.4)]' : 'text-slate-300 hover:text-white')}
+                >
+                  {r === 'admin' ? 'Admin' : 'Investigator'}
+                </button>
+              ))}
+            </div>
             <Badge tone="violet">Demo data</Badge>
             <Badge tone={online ? 'success' : 'danger'} dot>{online ? 'Live' : 'Offline'}</Badge>
             <div className="hidden items-center gap-3 border-l border-line pl-4 sm:flex">
-              <div className="grid h-8 w-8 place-items-center rounded-full bg-brand/20 text-xs font-semibold text-brand-soft">{initials(CURRENT_USER.name)}</div>
+              <div className="grid h-8 w-8 place-items-center rounded-full bg-brand/20 text-xs font-semibold text-brand-soft">{initials(user.name)}</div>
               <div className="leading-tight">
-                <div className="text-[13px] font-medium text-white">{CURRENT_USER.name}</div>
-                <div className="text-xs text-muted">{CURRENT_USER.role}</div>
+                <div className="text-[13px] font-medium text-white">{user.name}</div>
+                <div className="text-xs text-muted">{user.role}</div>
               </div>
             </div>
           </div>

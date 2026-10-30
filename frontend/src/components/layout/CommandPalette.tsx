@@ -5,7 +5,8 @@ import { CornerDownLeft, FileText, Search } from 'lucide-react';
 import { fetchDisputes } from '../../api/client';
 import { useDebounced, useEscape } from '../../lib/hooks';
 import { cn, money, reasonLabel } from '../../lib/format';
-import { PAGES } from './pages';
+import { PAGES, visibleTo } from './pages';
+import { useCurrentUser } from '../../lib/user';
 
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
@@ -17,6 +18,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   useEffect(() => { if (open) { setQ(''); setActive(0); setTimeout(() => inputRef.current?.focus(), 10); } }, [open]);
 
+  const { role } = useCurrentUser();
   const { data: disputes } = useQuery({
     queryKey: ['palette', dq],
     queryFn: () => fetchDisputes({ search: dq, sort_by: 'priority_score', sort_order: 'desc' }),
@@ -24,7 +26,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   });
 
   const items = useMemo(() => {
-    const pages = PAGES.filter((p) => p.name.toLowerCase().includes(q.toLowerCase())).map((p) => ({
+    const pages = PAGES.filter((p) => visibleTo(p, role) && p.name.toLowerCase().includes(q.toLowerCase())).map((p) => ({
       key: p.to, label: p.name, hint: 'Go to page', icon: <p.icon className="h-4 w-4" />, to: p.to,
     }));
     const cases = (disputes ?? []).slice(0, 6).map((d) => ({
@@ -32,7 +34,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       icon: <FileText className="h-4 w-4" />, to: `/investigate/${d.id}`,
     }));
     return [...cases, ...pages];
-  }, [q, disputes]);
+  }, [q, disputes, role]);
 
   useEffect(() => setActive(0), [items.length]);
 

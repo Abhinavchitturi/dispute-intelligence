@@ -3,9 +3,9 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, ArrowLeft, ArrowUpRight, Building2, CheckCircle2, ChevronDown, ChevronRight, CreditCard, FileText, Gavel, History,
-  Lightbulb, MessageSquare, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
+  HandHelping, Handshake, Lightbulb, MessageSquare, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
 } from 'lucide-react';
-import { fetchDisputeDetail, fetchDisputeMessages, fetchDisputeTimeline, fetchInvestigationBrief, fetchSimilarCasesForDispute } from '../api/client';
+import { assignDispute, fetchDisputeDetail, fetchDisputeMessages, fetchDisputeTimeline, fetchInvestigationBrief, fetchSimilarCasesForDispute } from '../api/client';
 import { ActionWizard, ActionResult } from '../components/ActionWizard';
 import { MessageThread } from '../components/MessageThread';
 import { TimelineEvent } from '../types';
@@ -16,7 +16,11 @@ import {
 import { EvidenceBadge, OutcomeBadge, StatusBadge } from '../components/ui/StatusBadges';
 import { Countdown, ScoreRing } from '../components/DisputeBits';
 import { InvestigationProgress } from '../components/InvestigationProgress';
-import { cn, evidenceLabel, evidenceMeta, fileSize, isClosed, money, outcomeMeta, parseServerDate, pastOutcomeLabel, prettifyCodes, reasonLabel, sentenceCase, titleCase } from '../lib/format';
+import { ClaimPoints } from '../components/ClaimPoints';
+import { EvidenceChecklist } from '../components/EvidenceChecklist';
+import { AdminReviewPanel } from '../components/AdminReviewPanel';
+import { useCurrentUser } from '../lib/user';
+import { cn, evidenceLabel, evidenceMeta, fileSize, isClosed, money, outcomeMeta, outcomeText, parseServerDate, pastOutcomeLabel, prettifyCodes, reasonLabel, sentenceCase, titleCase } from '../lib/format';
 
 type Tab = 'summary' | 'evidence' | 'timeline' | 'messages' | 'similar';
 
@@ -42,6 +46,7 @@ export function CaseInvestigationPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useToast();
+  const { user, isAdmin } = useCurrentUser();
 
   const [tab, setTab] = useState<Tab>('summary');
   const [highlighted, setHighlighted] = useState<string | null>(null);
@@ -61,6 +66,15 @@ export function CaseInvestigationPage() {
   const regenerate = useMutation({
     mutationFn: () => fetchInvestigationBrief(disputeId, true),
     onSuccess: (b) => { queryClient.setQueryData(['investigationBrief', disputeId], b); toast('success', 'Summary refreshed.'); },
+    onError: (e: Error) => toast('error', e.message),
+  });
+
+  const take = useMutation({
+    mutationFn: (assignee: string | null) => assignDispute(disputeId, assignee),
+    onSuccess: (r) => {
+      ['disputeDetail', 'disputes', 'urgentDisputes', 'dashboardSummary', 'auditEvents'].forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+      toast('success', r.assigned_to ? 'This case is now yours.' : 'Case released back to the queue.');
+    },
     onError: (e: Error) => toast('error', e.message),
   });
 
@@ -85,6 +99,10 @@ export function CaseInvestigationPage() {
   }
   const d = dispute.data;
   const decided = isClosed(d.status);
+  const withAdmin = d.status === 'PENDING_ADMIN_REVIEW';
+  const judged = d.outcome === 'BUYER_FAVOR' || d.outcome === 'SELLER_FAVOR';
+  const oneSideSettled = !decided && !!d.seller_settled_at !== !!d.buyer_settled_at;
+  const mine = d.assigned_to === user.name;
   const startAction = () => setWizardOpen(true);
   const b = brief.data;
   const gaps = b?.evidence_gaps ?? [];
@@ -109,6 +127,16 @@ export function CaseInvestigationPage() {
               <span className="flex items-center gap-1.5"><User className="h-3.5 w-3.5" />{d.buyer_reference ?? 'Buyer'}</span>
               <span className="flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" />{d.merchant_reference ?? 'Seller'}</span>
               <span className="font-mono">Txn {d.transaction_id ?? 'N/A'}</span>
+              {!decided && (
+                <span className="flex items-center gap-1.5">
+                  {d.assigned_to ? <>Owner: {mine ? 'you' : d.assigned_to}</> : 'Unassigned'}
+                  {!isAdmin && (!d.assigned_to || mine) && (
+                    <button onClick={() => take.mutate(mine ? null : user.name)} disabled={take.isPending} className="ml-1 inline-flex items-center gap-1 text-brand-soft hover:underline">
+                      <HandHelping className="h-3.5 w-3.5" />{mine ? 'Release' : 'Take this case'}
+                    </button>
+                  )}
+                </span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-8">
@@ -129,7 +157,11 @@ export function CaseInvestigationPage() {
             </div>
             {decided
               ? <span className="rounded-xl border border-line bg-raised/50 px-4 py-2.5 text-sm text-muted">Decided. No further action.</span>
-              : <Button variant="primary" onClick={startAction}><Send className="h-4 w-4" />Take action</Button>}
+              : withAdmin
+                ? <span className="rounded-xl border border-amber-400/25 bg-amber-400/[.07] px-4 py-2.5 text-sm text-amber-100">With an admin to confirm</span>
+                : isAdmin
+                  ? <span className="rounded-xl border border-line bg-raised/50 px-4 py-2.5 text-sm text-muted">Investigators act on this case</span>
+                  : <Button variant="primary" onClick={startAction}><Send className="h-4 w-4" />Take action</Button>}
           </div>
         </div>
         {d.buyer_claim && (
@@ -138,7 +170,28 @@ export function CaseInvestigationPage() {
             “{d.buyer_claim}”
           </blockquote>
         )}
+        <ClaimPoints points={d.claim_points} className="mt-3" />
       </Card>
+
+      {oneSideSettled && (
+        <div role="status" className="flex items-start gap-3 rounded-2xl border border-sky-400/25 bg-sky-400/[.07] p-4 text-sm text-sky-100">
+          <Handshake aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
+          <span><span className="font-medium">The {d.seller_settled_at ? 'seller' : 'buyer'} says this was settled outside PayPal.</span> It is not settled until the {d.seller_settled_at ? 'buyer' : 'seller'} confirms too, so the case continues.</span>
+        </div>
+      )}
+
+      {!decided && !withAdmin && d.review_note && d.status === 'UNDER_REVIEW' && !isAdmin && (
+        <div role="note" className="rounded-2xl border border-amber-400/25 bg-amber-400/[.07] p-4 text-sm text-amber-100">
+          <span className="font-medium">{d.reviewed_by ?? 'An admin'} sent this case back:</span> {d.review_note}
+        </div>
+      )}
+
+      {withAdmin && isAdmin && (
+        <Card className="p-6">
+          <SectionTitle title="Review this decision" hint="Confirm it, decide differently, or send it back with a note" />
+          <AdminReviewPanel dispute={d} showEvidence={false} />
+        </Card>
+      )}
 
       {lastResult && (
         <div role="status" className="flex items-start justify-between gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-sm text-emerald-200 animate-fade-in">
@@ -184,7 +237,10 @@ export function CaseInvestigationPage() {
                       <div className="flex gap-3 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4">
                         <Gavel className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
                         <div>
-                          <p className="font-medium text-white">{outcomeMeta(d.outcome) ? `Decided in the ${outcomeMeta(d.outcome)!.label.toLowerCase()}.` : 'This case is closed.'}</p>
+                          <p className="font-medium text-white">{outcomeMeta(d.outcome) ? (judged ? `Decided in the ${outcomeMeta(d.outcome)!.label.toLowerCase()}.` : `${outcomeText(d.outcome)}.`) : 'This case is closed.'}</p>
+                          {d.outcome === 'SETTLED' && <p className="mt-1 text-sm text-muted">The seller and the buyer both confirmed they settled it outside PayPal. No decision was made.</p>}
+                          {d.outcome === 'DISMISSED' && <p className="mt-1 text-sm text-muted">The buyer withdrew the claim. No refund was issued and no decision was made.</p>}
+                          {judged && d.proposed_reason && <p className="mt-1 text-sm text-slate-300"><span className="text-muted">Reason: </span>{d.proposed_reason}</p>}
                           <p className="mt-1 text-sm text-muted">There's nothing left to do on this case. To take action, open a case that's New, waiting on replies, or ready to decide from All disputes.</p>
                         </div>
                       </div>
@@ -200,7 +256,7 @@ export function CaseInvestigationPage() {
                           <Button size="sm" variant="ghost" loading={regenerate.isPending} onClick={() => regenerate.mutate()}>
                             {!regenerate.isPending && <RefreshCw className="h-3.5 w-3.5" />} Refresh
                           </Button>
-                          {!decided && <Button size="sm" variant="primary" onClick={startAction}>Take action</Button>}
+                          {!decided && !withAdmin && !isAdmin && <Button size="sm" variant="primary" onClick={startAction}>Take action</Button>}
                         </div>
                       }
                     />
@@ -301,6 +357,7 @@ export function CaseInvestigationPage() {
 
           {tab === 'evidence' && (
             <div className="space-y-4 animate-fade-in">
+              <Card className="p-6"><EvidenceChecklist disputeId={disputeId} title="What each side has sent" /></Card>
               <RecordCard
                 id={d.order?.shipment?.id ?? 'DEMO-SHIP-1042'} highlighted={highlighted}
                 icon={<Truck className="h-4 w-4" />} title="Shipment" badge={<Badge tone="info">{d.order?.shipment?.carrier ?? 'Carrier'}</Badge>}
@@ -373,6 +430,8 @@ export function CaseInvestigationPage() {
                           <span className="shrink-0 text-xs text-muted">{parseServerDate(e.timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
                           <ChevronRight className="h-4 w-4 shrink-0 text-muted transition group-hover:translate-x-0.5 group-hover:text-white" />
                         </button>
+                        {/* What the buyer said that needs chasing sits under the event, so it can't be skipped. */}
+                        {!!e.claim_points?.length && <div className="px-6 pb-4 pl-[4.5rem]"><ClaimPoints points={e.claim_points} /></div>}
                       </li>
                     );
                   })}

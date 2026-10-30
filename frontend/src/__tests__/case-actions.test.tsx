@@ -10,7 +10,18 @@ const baseDispute = {
   id: 'D-1', source: 'synthetic', status: 'OPEN', reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', outcome: null,
   amount: 450, currency: 'USD', response_due_date: null, created_at: null, priority_score: 58, priority_factors: [],
   evidence_status: 'MISSING', buyer_claim: 'Never arrived', buyer_reference: 'Alex', merchant_reference: 'TechStore', transaction_id: 'T-1',
-  transaction: null, order: null, evidence_items: [], latest_brief_id: null,
+  transaction: null, order: null, evidence_items: [], latest_brief_id: null, claim_points: [],
+  assigned_to: null, proposed_outcome: null, proposed_reason: null, proposed_by: null, proposed_at: null, review_note: null, reviewed_by: null,
+  seller_settled_at: null, buyer_settled_at: null,
+};
+const line = (evidence_type: string, label: string, over: Record<string, unknown> = {}) => ({
+  evidence_type, label, party: 'SELLER', status: 'PROVIDED', detail: '', why: '', description: null, evidence_id: `EV-${evidence_type}`, provided_at: null,
+  file_name: null, content_type: null, size_bytes: null, duration_seconds: null, storage: null, preview: null, is_video: false, ...over,
+});
+const SUMMARY = {
+  seller: [line('CARRIER_TRACKING', 'Carrier tracking', { description: 'UPS shows delivered' }), line('PROOF_OF_DELIVERY_SIGNATURE', 'Proof of delivery signature', { status: 'MISSING', evidence_id: null, detail: 'Requested, but the seller did not send it.' })],
+  buyer: [line('BUYER_CAMERA_FOOTAGE', 'Camera footage', { party: 'BUYER', status: 'MISSING', evidence_id: null, detail: 'Not requested yet. Ask the buyer for it.' })],
+  records: [],
 };
 const option = (evidence_type: string, label: string, over: Record<string, unknown> = {}) => ({ evidence_type, label, why: `Why ${label}`, on_file: false, on_file_description: null, suggested: false, ...over });
 const OPTIONS = {
@@ -20,7 +31,7 @@ const OPTIONS = {
 };
 const RECIPIENT: Record<string, string> = { REQUEST_SELLER_EVIDENCE: 'Seller', REQUEST_BUYER_EVIDENCE: 'Buyer', DECIDE_FOR_BUYER: 'Seller and buyer', DECIDE_FOR_SELLER: 'Seller and buyer' };
 
-function setup(route = '/investigate/D-1', opts: { timeline?: any[]; messages?: any[]; status?: string; outcome?: string | null; evidence_items?: any[]; failBuyer?: boolean } = {}) {
+function setup(route = '/investigate/D-1', opts: { timeline?: any[]; messages?: any[]; status?: string; outcome?: string | null; evidence_items?: any[]; failBuyer?: boolean; claim_points?: any[] } = {}) {
   const calls: { url: string; body?: any }[] = [];
   let sent: any[] = opts.messages ?? []; // messages the (fake) server has stored so far
   global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
@@ -38,6 +49,8 @@ function setup(route = '/investigate/D-1', opts: { timeline?: any[]; messages?: 
         warnings: body.action_type.startsWith('DECIDE') ? ["A decision closes the case and moves money. It can't be undone."] : [],
         notes: body.action_type.startsWith('REQUEST') ? ['The reply is due soon.'] : ['This one notice goes to both the seller and the buyer.'] });
     }
+    if (url.endsWith('/evidence-summary')) return ok(SUMMARY);
+    if (url.endsWith('/decision')) return ok({ success: true, status: 'PENDING_ADMIN_REVIEW', message: 'Sent to an admin for review. Nobody has been told yet.' });
     if (url.endsWith('/actions/preview')) return ok({ dispute_id: 'D-1', action_type: body.action_type, is_supported: true, requires_confirmation: true, impact_summary: 'Impact text', warning_message: null, target_environment: 'demo', api_endpoint: null });
     if (url.endsWith('/actions/execute')) {
       if (opts.failBuyer && body.action_type === 'REQUEST_BUYER_EVIDENCE') {
@@ -55,7 +68,7 @@ function setup(route = '/investigate/D-1', opts: { timeline?: any[]; messages?: 
     if (url.endsWith('/timeline')) return ok(opts.timeline ?? []);
     if (url.endsWith('/similar-cases')) return ok([]);
     if (url.includes('/brief')) return ok({ id: 'B', dispute_id: 'D-1', generated_at: '', provider: 'rule_based', model: null, summary: 's', structured_findings: [], evidence_gaps: [], recommendations: [], generation_status: 'SUCCESS' });
-    if (url.includes('/api/disputes/D-1')) return ok({ ...baseDispute, status: opts.status ?? baseDispute.status, outcome: opts.outcome ?? null, evidence_items: opts.evidence_items ?? [] });
+    if (url.includes('/api/disputes/D-1')) return ok({ ...baseDispute, status: opts.status ?? baseDispute.status, outcome: opts.outcome ?? null, evidence_items: opts.evidence_items ?? [], claim_points: opts.claim_points ?? [] });
     return Promise.reject(new Error(`Unhandled url: ${url}`));
   });
   render(
@@ -85,20 +98,20 @@ describe('Case page: take-action popup', () => {
     expect(screen.queryByLabelText('Message to send')).not.toBeInTheDocument();
   });
 
-  it('offers PayPal four things to do, in two groups, and says where the case stands', async () => {
+  it('offers two ways to ask, a separate Ready to decide button, and says where the case stands', async () => {
     setup();
     const dialog = await openWizard();
     expect(within(dialog).getByText(/Nobody has been asked for anything yet/)).toBeInTheDocument();
     expect(within(dialog).getByText('Ask for evidence')).toBeInTheDocument();
-    expect(within(dialog).getByText('Make the call')).toBeInTheDocument();
-    // Asking can be combined, so those are tick boxes. Deciding is one or the other, so those are radios.
+    // Asking can be combined, so those are tick boxes.
     for (const name of ['Ask the seller for evidence', 'Ask the buyer for evidence']) {
       expect(within(dialog).getByRole('checkbox', { name: new RegExp(name, 'i') })).toBeInTheDocument();
     }
-    for (const name of ["Decide in the buyer's favor", "Decide in the seller's favor"]) {
-      expect(within(dialog).getByRole('radio', { name: new RegExp(name, 'i') })).toBeInTheDocument();
-    }
-    // None of the old seller-side actions.
+    // Deciding is no longer one of the choices. It has its own button.
+    expect(within(dialog).queryByText('Make the call')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('radio')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Decide in the (buyer|seller)'s favor/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Ready to decide' })).toBeEnabled();
     expect(within(dialog).queryByText(/Accept claim|Send tracking/i)).not.toBeInTheDocument();
   });
 
@@ -149,9 +162,10 @@ describe('Case page: take-action popup', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Done in demo');
     // You land on the conversation: your message is there and we're waiting on the seller.
     expect(await screen.findByRole('tab', { name: /Messages/i, selected: true })).toBeInTheDocument();
-    const convo = await screen.findByLabelText('Conversation');
+    const convo = await screen.findByLabelText('Seller conversation');
     expect(within(convo).getByText('My own careful wording')).toBeInTheDocument();
     expect(within(convo).getByText(/Waiting for the/)).toHaveTextContent('Waiting for the seller to reply');
+    expect(within(screen.getByLabelText('Buyer conversation')).getByText(/Nothing sent to the buyer yet/)).toBeInTheDocument(); // the buyer has their own chat
   });
 
   it('cannot continue to the message with nothing ticked', async () => {
@@ -183,12 +197,10 @@ describe('Case page: take-action popup', () => {
   describe('choosing several things at once', () => {
     const asked = (calls: { url: string; body?: any }[]) => calls.filter((c) => c.url.endsWith('/actions/execute')).map((c) => c.body);
 
-    it('lets you tick both seller and buyer, always keeps one, and treats a decision as a separate, exclusive choice', async () => {
+    it('lets you tick both seller and buyer and always keeps one', async () => {
       const dialog = await (async () => { setup(); return openWizard(); })();
       const seller = within(dialog).getByRole('checkbox', { name: /Ask the seller for evidence/i });
       const buyer = within(dialog).getByRole('checkbox', { name: /Ask the buyer for evidence/i });
-      const forBuyer = within(dialog).getByRole('radio', { name: /Decide in the buyer's favor/i });
-      const forSeller = within(dialog).getByRole('radio', { name: /Decide in the seller's favor/i });
       expect(seller).toBeChecked(); expect(buyer).not.toBeChecked();
 
       fireEvent.click(buyer);                                   // add the buyer: both ticked
@@ -199,15 +211,6 @@ describe('Case page: take-action popup', () => {
       expect(seller).not.toBeChecked(); expect(buyer).toBeChecked();
       fireEvent.click(buyer);                                   // can't drop the last one
       expect(buyer).toBeChecked();
-
-      fireEvent.click(forBuyer);                                // a decision replaces asking...
-      expect(forBuyer).toBeChecked(); expect(buyer).not.toBeChecked(); expect(seller).not.toBeChecked();
-      fireEvent.click(forSeller);                               // ...and only one decision at a time
-      expect(forSeller).toBeChecked(); expect(forBuyer).not.toBeChecked();
-      expect(screen.getByRole('button', { name: /Next: review decision/i })).toBeInTheDocument();
-
-      fireEvent.click(seller);                                  // asking again clears the decision
-      expect(seller).toBeChecked(); expect(forSeller).not.toBeChecked();
     });
 
     it('asks both sides in one pass: a list and an editable message for each, then sends both', async () => {
@@ -249,8 +252,9 @@ describe('Case page: take-action popup', () => {
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       expect(screen.getByRole('status')).toHaveTextContent('Requests sent to the seller and the buyer.');
       // You land on the conversation, waiting on both.
-      const convo = await screen.findByLabelText('Conversation');
-      expect(within(convo).getAllByText(/Waiting for the/).map((w) => w.textContent)).toEqual([expect.stringContaining('seller'), expect.stringContaining('buyer')]);
+      // Each side has its own chat, and each is waiting.
+      expect(within(await screen.findByLabelText('Seller conversation')).getByText(/Waiting for the/)).toHaveTextContent('seller');
+      expect(within(screen.getByLabelText('Buyer conversation')).getByText(/Waiting for the/)).toHaveTextContent('buyer');
     });
 
     it("can't continue while one of the two lists is empty", async () => {
@@ -281,37 +285,47 @@ describe('Case page: take-action popup', () => {
     });
   });
 
-  it('deciding takes two steps: no checklist, the warnings are shown, and Confirm stays locked until you tick that you reviewed the evidence', async () => {
+  it('Ready to decide opens one page: the evidence (missing in red), the facts, then a reason and two buttons', async () => {
     const calls = setup();
     const dialog = await openWizard();
-    fireEvent.click(screen.getByRole('radio', { name: /Decide in the buyer's favor/i }));
-    expect(within(dialog).getByRole('button', { name: /Next: review decision/i })).toBeInTheDocument();
-    press(/Next: review decision/i);
+    press(/^Ready to decide$/);
 
-    // Choose, then Decide. There is no separate review step to click through.
+    // Choose, then Decide. There is no message to write: an admin sends the notice.
     const steps = within(screen.getByLabelText('Steps'));
     expect(steps.getAllByRole('listitem').map((li) => (li.textContent ?? '').replace(/^\d/, ''))).toEqual(['Choose', 'Decide']);
+    expect(screen.queryByLabelText('Message to send')).not.toBeInTheDocument();
 
-    const box = (await screen.findByLabelText('Message to send')) as HTMLTextAreaElement;
-    await waitFor(() => expect(box.value).toBe('Draft for DECIDE_FOR_BUYER'));
-    expect(screen.queryByLabelText('What to ask for')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Next: review$/i })).not.toBeInTheDocument();
-    expect(within(screen.getByLabelText('Draft warnings')).getByText(/can't be undone/)).toBeInTheDocument();
-    expect(within(screen.getByLabelText('Draft notes')).getByText(/both the seller and the buyer/)).toBeInTheDocument();
-    expect(await screen.findByText('Impact text')).toBeInTheDocument(); // what the decision will do, on the same screen
+    // What each side sent is shown, and what is missing is red and says why.
+    const evidence = await screen.findByLabelText('Evidence on this case');
+    expect(within(evidence).getByText('UPS shows delivered')).toBeInTheDocument();
+    const missing = within(evidence).getByText('Requested, but the seller did not send it.');
+    expect(missing).toHaveClass('text-red-300/90');
+    expect(missing.closest('li')).toHaveAttribute('data-status', 'MISSING');
+    expect(within(evidence).getByText('2 items missing')).toBeInTheDocument();
 
-    const confirm = screen.getByRole('button', { name: /Confirm decision/i });
-    expect(confirm).toBeDisabled();
-    // The tick is about the evidence on file. It doesn't demand anything from both sides.
+    // The facts panel is a summary, not a verdict.
+    expect(await screen.findByLabelText('How the evidence stacks up')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Confirm decision/i })).not.toBeInTheDocument();
+
+    const forBuyer = within(dialog).getByRole('button', { name: /^Buyer's favor$/ });
+    const forSeller = within(dialog).getByRole('button', { name: /^Seller's favor$/ });
+    expect(forBuyer).toBeDisabled(); expect(forSeller).toBeDisabled();
+
+    // A reason is required, and so is ticking that you reviewed the evidence.
     fireEvent.click(screen.getByRole('checkbox', { name: /reviewed the evidence on file/i }));
-    await waitFor(() => expect(confirm).toBeEnabled());
-    fireEvent.click(confirm);
+    expect(forBuyer).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Reason for your decision'), { target: { value: 'too short' } });
+    expect(forBuyer).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Reason for your decision'), { target: { value: 'The carrier delivered to the confirmed address.' } });
+    await waitFor(() => expect(forSeller).toBeEnabled());
+    fireEvent.click(forSeller);
 
-    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/actions/execute'))).toBe(true));
-    const exec = calls.find((c) => c.url.endsWith('/actions/execute'))!;
-    expect(exec.body).toMatchObject({ action_type: 'DECIDE_FOR_BUYER', confirmed: true, message: 'Draft for DECIDE_FOR_BUYER' });
-    expect(exec.body.requested_evidence).toBeUndefined();
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/decision'))).toBe(true));
+    const sent = calls.find((c) => c.url.endsWith('/decision'))!;
+    expect(sent.body).toMatchObject({ outcome: 'SELLER_FAVOR', reason: 'The carrier delivered to the confirmed address.', confirmed: true, actor: 'Abhinav Chitturi' });
+    expect(calls.some((c) => c.url.endsWith('/actions/execute'))).toBe(false); // nobody is told yet
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('status')).toHaveTextContent('Sent to an admin for review. Nobody has been told yet.');
   });
 
   it('before you decide, shows what points toward each side, says it is not a verdict, and shows nothing like it when asking for evidence', async () => {
@@ -323,8 +337,7 @@ describe('Case page: take-action popup', () => {
     expect(screen.queryByLabelText('How the evidence stacks up')).not.toBeInTheDocument();
     press(/Back/i);
 
-    fireEvent.click(screen.getByRole('radio', { name: /Decide in the seller's favor/i }));
-    press(/Next: review decision/i);
+    press(/^Ready to decide$/);
     const panel = await screen.findByLabelText('How the evidence stacks up');
     expect(within(panel).getByText(/It isn't a verdict\. The call is yours\./)).toBeInTheDocument();
     expect(within(panel).getByText(/Toward the buyer/)).toHaveTextContent('(2)');
@@ -335,13 +348,23 @@ describe('Case page: take-action popup', () => {
     expect(within(panel).getByText('Also on file: Appraisal letter (on file)')).toBeInTheDocument();
   });
 
+  it('going back from the decision page returns to asking for evidence', async () => {
+    setup();
+    await openWizard();
+    press(/^Ready to decide$/);
+    await screen.findByLabelText('Reason for your decision');
+    press(/Back/i);
+    expect(screen.getByRole('group', { name: 'Ask for evidence' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Reason for your decision')).not.toBeInTheDocument();
+  });
+
   it('Back and Cancel work and nothing is sent', async () => {
     const calls = setup();
     await openWizard();
     press(/Next: write message/i);
     await screen.findByLabelText('Message to send');
     press(/Back/i);
-    expect(screen.getByRole('radiogroup')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Ask for evidence' })).toBeInTheDocument();
     press(/Cancel/i);
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(calls.some((c) => c.url.endsWith('/actions/execute'))).toBe(false);

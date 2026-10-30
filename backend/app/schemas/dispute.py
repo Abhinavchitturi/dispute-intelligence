@@ -87,16 +87,36 @@ class DisputeListItem(BaseModel):
     priority_factors: List[PriorityFactor] = []
     evidence_status: str
     buyer_claim: Optional[str] = None
-    outcome: Optional[str] = None  # BUYER_FAVOR or SELLER_FAVOR once PayPal has decided
+    outcome: Optional[str] = None  # BUYER_FAVOR, SELLER_FAVOR, SETTLED or DISMISSED once the case is closed
+    assigned_to: Optional[str] = None
+    proposed_outcome: Optional[str] = None
+    proposed_reason: Optional[str] = None
+    proposed_by: Optional[str] = None
+    proposed_at: Optional[datetime] = None
+    review_note: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    seller_settled_at: Optional[datetime] = None
+    buyer_settled_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+class ClaimPoint(BaseModel):
+    """Something the buyer said that the investigator should follow up, and where that stands."""
+    key: str
+    label: str
+    quote: str                       # the buyer's own words
+    note: str                        # what it means for the case
+    on_file: bool                    # is the supporting evidence already on the case?
+    evidence_type: Optional[str] = None
+    party: Optional[str] = None      # who to ask: SELLER or BUYER
 
 class DisputeDetail(DisputeListItem):
     transaction: Optional[TransactionSchema] = None
     order: Optional[OrderSchema] = None
     evidence_items: List[EvidenceSchema] = []
     latest_brief_id: Optional[str] = None
+    claim_points: List[ClaimPoint] = []
 
 class TimelineEvent(BaseModel):
     id: str
@@ -107,6 +127,7 @@ class TimelineEvent(BaseModel):
     source: str  # "synthetic" or "paypal_sandbox"
     source_record_id: Optional[str] = None
     status: Optional[str] = None
+    claim_points: List[ClaimPoint] = []  # only on the "dispute filed" event
 
 class HistoricalCaseSchema(BaseModel):
     id: str

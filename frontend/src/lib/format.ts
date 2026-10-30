@@ -70,7 +70,7 @@ export const reasonLabel = (reason: string) => REASONS[reason] ?? titleCase(reas
 export type Tone = 'neutral' | 'brand' | 'success' | 'warn' | 'danger' | 'info' | 'violet';
 
 // PayPal's view of a case. OPEN = nobody has been asked yet. WAITING_* = a party owes us evidence. UNDER_REVIEW = evidence is in, PayPal decides.
-export const OPEN_STATUSES = ['OPEN', 'WAITING_FOR_SELLER_RESPONSE', 'WAITING_FOR_BUYER_RESPONSE', 'WAITING_FOR_BOTH_RESPONSES', 'UNDER_REVIEW'];
+export const OPEN_STATUSES = ['OPEN', 'WAITING_FOR_SELLER_RESPONSE', 'WAITING_FOR_BUYER_RESPONSE', 'WAITING_FOR_BOTH_RESPONSES', 'UNDER_REVIEW', 'PENDING_ADMIN_REVIEW'];
 export const WAITING_STATUSES = ['WAITING_FOR_SELLER_RESPONSE', 'WAITING_FOR_BUYER_RESPONSE', 'WAITING_FOR_BOTH_RESPONSES'];
 export const isClosed = (status: string) => status === 'RESOLVED' || status === 'CLOSED';
 
@@ -81,6 +81,7 @@ export function statusMeta(status: string): { label: string; tone: Tone } {
     case 'WAITING_FOR_BUYER_RESPONSE': return { label: 'Waiting on buyer', tone: 'info' };
     case 'WAITING_FOR_BOTH_RESPONSES': return { label: 'Waiting on both', tone: 'info' };
     case 'UNDER_REVIEW': return { label: 'Ready to decide', tone: 'violet' };
+    case 'PENDING_ADMIN_REVIEW': return { label: 'With admin', tone: 'warn' };
     case 'RESOLVED': return { label: 'Resolved', tone: 'success' };
     case 'CLOSED': return { label: 'Closed', tone: 'success' };
     default: return { label: titleCase(status), tone: 'neutral' };
@@ -90,7 +91,16 @@ export function statusMeta(status: string): { label: string; tone: Tone } {
 export function outcomeMeta(outcome: string | null | undefined): { label: string; tone: Tone } | null {
   if (outcome === 'BUYER_FAVOR') return { label: "Buyer's favor", tone: 'warn' };
   if (outcome === 'SELLER_FAVOR') return { label: "Seller's favor", tone: 'success' };
+  if (outcome === 'SETTLED') return { label: 'Settled outside PayPal', tone: 'info' };
+  if (outcome === 'DISMISSED') return { label: 'Dismissed, buyer withdrew', tone: 'neutral' };
   return null;
+}
+
+/** One line for how a case ended: "Decided: buyer's favor", "Settled outside PayPal", "Dismissed, buyer withdrew". */
+export function outcomeText(outcome: string | null | undefined): string | null {
+  const o = outcomeMeta(outcome);
+  if (!o) return null;
+  return outcome === 'BUYER_FAVOR' || outcome === 'SELLER_FAVOR' ? `Decided: ${o.label.toLowerCase()}` : o.label;
 }
 
 export function priorityMeta(score: number): { label: string; tone: Tone } {

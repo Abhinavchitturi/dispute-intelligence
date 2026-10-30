@@ -45,7 +45,7 @@ BUYER_ITEMS_BY_REASON: Dict[str, List[str]] = {
 DEFAULT_BUYER_ITEMS = ["BUYER_STATEMENT"]
 
 # Evidence recorded before this catalog existed under different names.
-ALIASES: Dict[str, List[str]] = {"BUYER_PHOTOS_OF_ITEM": ["PHOTO_PROOF"]}
+ALIASES: Dict[str, List[str]] = {"BUYER_PHOTOS_OF_ITEM": ["PHOTO_PROOF", "PRODUCT_PHOTO"]}
 
 
 def label(evidence_type: str) -> str:
