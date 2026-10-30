@@ -1,334 +1,330 @@
-import React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import {
-  ShieldAlert,
-  Clock,
-  FileQuestion,
-  UserCheck,
-  TrendingUp,
-  AlertTriangle,
-  ArrowRight,
-  CheckCircle,
-  XCircle,
-  HelpCircle,
-  ArrowUpRight
-} from 'lucide-react';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell
-} from 'recharts';
-import { fetchDashboardSummary } from '../api/client';
+import { AlertTriangle, ArrowRight, CheckCircle2, Clock, FolderOpen, Gavel, Hourglass, RefreshCw, ShieldAlert, ShieldCheck, Star, XCircle } from 'lucide-react';
+import { fetchCaseRequests, fetchDashboardSummary, fetchDisputes, fetchMe, fetchNotifications, requestCases } from '../api/client';
+import { Badge, Button, Card, CountUp, EmptyState, ErrorState, Meter, PageHeader, SectionTitle, Skeleton, Textarea, useToast } from '../components/ui/kit';
+import { DistributeDialog } from '../components/DistributeDialog';
+import { AssignSelect } from '../components/AssignSelect';
+import { DecideBy, ScoreRing } from '../components/DisputeBits';
+import { cn, money, OPEN_STATUSES, reasonLabel, timeAgo, Tone } from '../lib/format';
+import { useNow } from '../lib/hooks';
+import { firstName, useCurrentUser } from '../lib/user';
+
+const REFRESH_MS = 30_000;
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+const KPI_STYLES: Record<string, string> = {
+  brand: 'text-brand-soft bg-brand/15', warn: 'text-amber-300 bg-amber-400/10',
+  danger: 'text-rose-300 bg-rose-400/10', success: 'text-emerald-300 bg-emerald-400/10',
+};
+
+function Kpi({ label, value, hint, icon, tone, onClick }: {
+  label: string; value: number; hint: string; icon: React.ReactNode; tone: keyof typeof KPI_STYLES; onClick: () => void;
+}) {
+  return (
+    <button onClick={onClick} className="group text-left">
+      <Card className="h-full p-5 transition duration-200 group-hover:-translate-y-0.5 group-hover:border-brand/40 group-hover:bg-raised">
+        <div className="flex items-center justify-between">
+          <span className="text-[13px] font-medium text-muted">{label}</span>
+          <span className={cn('grid h-9 w-9 place-items-center rounded-xl', KPI_STYLES[tone])}>{icon}</span>
+        </div>
+        <div className="mt-3 flex items-end justify-between">
+          <span className="text-4xl font-semibold tracking-tight text-white tabular"><CountUp value={value} /></span>
+          <ArrowRight className="mb-1.5 h-4 w-4 text-muted opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+        </div>
+        <p className="mt-1 text-[13px] text-muted">{hint}</p>
+      </Card>
+    </button>
+  );
+}
 
 export function OverviewPage() {
   const navigate = useNavigate();
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['dashboardSummary'],
-    queryFn: fetchDashboardSummary,
+  const now = useNow(10_000);
+  const { user, isManager } = useCurrentUser();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [distributing, setDistributing] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState('');
+
+  const summary = useQuery({ queryKey: ['dashboardSummary', user.name], queryFn: () => fetchDashboardSummary(user.name), refetchInterval: REFRESH_MS });
+  const urgent = useQuery({
+    queryKey: ['urgentDisputes'],
+    queryFn: () => fetchDisputes({ sort_by: 'priority_score', sort_order: 'desc' }),
+    refetchInterval: REFRESH_MS,
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="flex flex-col items-center space-y-3">
-          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-xs text-slate-400">Loading dispute portfolio analytics...</p>
-        </div>
-      </div>
-    );
-  }
+  const me = useQuery({ queryKey: ['me', user.id], queryFn: fetchMe, refetchInterval: REFRESH_MS, enabled: !isManager, retry: 0 });
+  const strikes = me.data?.strikes ?? user.strikes;
+  const myRequests = useQuery({ queryKey: ['caseRequests', 'mine'], queryFn: () => fetchCaseRequests(), enabled: !isManager, retry: 0 });
+  const ask = useMutation({
+    mutationFn: () => requestCases(note.trim() || undefined),
+    onSuccess: () => { toast('success', 'Your manager has been alerted.'); setAsking(false); setNote(''); qc.invalidateQueries({ queryKey: ['caseRequests'] }); },
+    onError: (e: Error) => toast('error', e.message),
+  });
+  const unowned = useQuery({ queryKey: ['disputes', 'unassigned'], queryFn: () => fetchDisputes({ unassigned: true, sort_by: 'priority_score', sort_order: 'desc' }), refetchInterval: REFRESH_MS, enabled: isManager, retry: 0 });
+  const needOwner = (unowned.data ?? []).filter((d) => OPEN_STATUSES.includes(d.status) && !d.assigned_to).slice(0, 5);
+  const alerts = useQuery({ queryKey: ['notifications'], queryFn: fetchNotifications, refetchInterval: REFRESH_MS, enabled: isManager, retry: 0 });
+  const data = summary.data;
+  // A manager's list is the high-profile cases, since those are theirs.
+  const top = (urgent.data ?? []).filter((d) => OPEN_STATUSES.includes(d.status) && (!isManager || d.is_high_profile)).slice(0, 5);
 
-  if (error || !data) {
-    return (
-      <div className="p-6 bg-rose-950/30 border border-rose-800 rounded-lg text-rose-200">
-        <p className="font-semibold text-sm">Failed to load dashboard summary.</p>
-        <p className="text-xs text-rose-300 mt-1">Please ensure backend server is running on port 8000.</p>
-      </div>
-    );
-  }
+  const refresh = () => { summary.refetch(); urgent.refetch(); };
 
-  const priorityPieData = [
-    { name: 'Critical (>=70)', value: data.priority_distribution.high, color: '#EF4444' },
-    { name: 'Medium (40-69)', value: data.priority_distribution.medium, color: '#F59E0B' },
-    { name: 'Standard (<40)', value: data.priority_distribution.low, color: '#10B981' },
-  ];
+  if (summary.isError) return <ErrorState message="Couldn't load the dashboard." onRetry={refresh} />;
 
-  const reasonBarData = data.disputes_by_reason.map(r => ({
-    name: r.reason.replace('MERCHANDISE_OR_SERVICE_', '').replace(/_/g, ' '),
-    count: r.count
-  }));
+  const totalReasons = data?.disputes_by_reason.reduce((a, r) => a + r.count, 0) || 1;
+  const prio = data?.priority_distribution;
+  const prioTotal = prio ? prio.high + prio.medium + prio.low || 1 : 1;
+  const prioRows: { label: string; value: number; tone: Tone; bar: string }[] = prio ? [
+    { label: 'Urgent (70+)', value: prio.high, tone: 'danger', bar: 'bg-rose-400' },
+    { label: 'Medium (40–69)', value: prio.medium, tone: 'warn', bar: 'bg-amber-400' },
+    { label: 'Low (under 40)', value: prio.low, tone: 'success', bar: 'bg-emerald-400' },
+  ] : [];
 
   return (
-    <div className="space-y-6">
-      {/* Top Banner Notice */}
-      <div className="p-4 rounded-xl bg-gradient-to-r from-[#111A33] via-[#161F38] to-[#111A33] border border-[#233054] flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-lg font-bold text-white tracking-tight">Executive Dispute Overview</h1>
-            <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-700/60">
-              SYNTHETIC DEMO DATASET
+    <>
+      <PageHeader
+        title={`${greeting()}, ${firstName(user.name)}`}
+        subtitle="Dispute Overview. Here's what needs your attention first."
+        actions={
+          <>
+            <span className="hidden text-[13px] text-muted sm:block">
+              {summary.dataUpdatedAt ? `Updated ${timeAgo(summary.dataUpdatedAt, now)}` : 'Loading…'}
             </span>
-          </div>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Operational queue health, priority distribution, and evidentiary integrity across authorized records.
-          </p>
-        </div>
-        <button
-          onClick={() => navigate('/investigate/DEMO-DSP-1042')}
-          className="inline-flex items-center space-x-2 px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-blue-600/20 transition self-start md:self-auto"
-        >
-          <span>Open Main Demo Case (Alex Morgan #1042)</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </button>
-      </div>
+            <Button size="sm" onClick={refresh} aria-label="Refresh data">
+              <RefreshCw className={cn('h-4 w-4', (summary.isFetching || urgent.isFetching) && 'animate-spin')} /> Refresh
+            </Button>
+            {isManager && <Button size="sm" onClick={() => setDistributing(true)}>Distribute cases</Button>}
+            <Button size="sm" onClick={() => navigate('/queue')}>{isManager ? 'View all cases' : 'View your cases'}</Button>
+            <Button size="sm" variant="primary" onClick={() => navigate('/investigate/DEMO-DSP-1042')}>Open demo case</Button>
+          </>
+        }
+      />
 
-      {/* KPI Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Metric 1 */}
-        <div
-          onClick={() => navigate('/queue')}
-          className="p-4 rounded-xl bg-[#0F172A] border border-[#1E293B] hover:border-blue-500/50 cursor-pointer transition group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400">Total Open Disputes</span>
-            <div className="p-2 rounded-lg bg-blue-950/60 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition">
-              <ShieldAlert className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-bold text-white">{data.total_open_disputes}</span>
-            <span className="text-[11px] text-blue-400 font-medium flex items-center">
-              View queue <ArrowUpRight className="w-3 h-3 ml-0.5" />
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-500 mt-1">Requiring investigator review or tracking input</p>
-        </div>
-
-        {/* Metric 2 */}
-        <div
-          onClick={() => navigate('/queue?priority_level=high')}
-          className="p-4 rounded-xl bg-[#0F172A] border border-[#1E293B] hover:border-amber-500/50 cursor-pointer transition group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400">Deadlines &lt; 48h</span>
-            <div className="p-2 rounded-lg bg-amber-950/60 text-amber-400 group-hover:bg-amber-600 group-hover:text-white transition">
-              <Clock className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-bold text-amber-300">{data.approaching_deadline_count}</span>
-            <span className="text-[11px] text-amber-400 font-medium flex items-center">
-              Imminent response <ArrowUpRight className="w-3 h-3 ml-0.5" />
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-500 mt-1">Risk of automated buyer default settlement</p>
-        </div>
-
-        {/* Metric 3 */}
-        <div
-          onClick={() => navigate('/queue?evidence_status=MISSING')}
-          className="p-4 rounded-xl bg-[#0F172A] border border-[#1E293B] hover:border-rose-500/50 cursor-pointer transition group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400">Evidence Gaps / Conflicts</span>
-            <div className="p-2 rounded-lg bg-rose-950/60 text-rose-400 group-hover:bg-rose-600 group-hover:text-white transition">
-              <FileQuestion className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-bold text-rose-300">{data.missing_evidence_count}</span>
-            <span className="text-[11px] text-rose-400 font-medium flex items-center">
-              Action needed <ArrowUpRight className="w-3 h-3 ml-0.5" />
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-500 mt-1">Missing tracking, geocode, or rebuttal artifacts</p>
-        </div>
-
-        {/* Metric 4 */}
-        <div
-          onClick={() => navigate('/queue?status=WAITING_FOR_SELLER_RESPONSE')}
-          className="p-4 rounded-xl bg-[#0F172A] border border-[#1E293B] hover:border-emerald-500/50 cursor-pointer transition group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400">Awaiting Seller Input</span>
-            <div className="p-2 rounded-lg bg-emerald-950/60 text-emerald-400 group-hover:bg-emerald-600 group-hover:text-white transition">
-              <UserCheck className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-bold text-emerald-300">{data.awaiting_review_count}</span>
-            <span className="text-[11px] text-emerald-400 font-medium flex items-center">
-              Inspect claims <ArrowUpRight className="w-3 h-3 ml-0.5" />
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-500 mt-1">Active merchant evidence upload window</p>
-        </div>
-      </div>
-
-      {/* Analytics Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Chart 1: Volume by Reason */}
-        <div className="lg:col-span-2 p-5 rounded-xl bg-[#0F172A] border border-[#1E293B]">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-sm font-semibold text-white">Dispute Volume by Category</h2>
-              <p className="text-xs text-slate-400">Real distribution across active portfolio</p>
-            </div>
-            <span className="text-[11px] text-slate-400 font-mono">Total {data.total_open_disputes} claims</span>
-          </div>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={reasonBarData} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
-                <XAxis dataKey="name" tick={{ fill: '#8A99AD', fontSize: 11 }} interval={0} angle={-15} textAnchor="end" />
-                <YAxis tick={{ fill: '#8A99AD', fontSize: 11 }} allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#161F38', borderColor: '#233054', borderRadius: '8px', color: '#fff' }}
-                  labelStyle={{ color: '#E2E8F0', fontWeight: 'bold' }}
-                />
-                <Bar dataKey="count" fill="#3A86FF" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Chart 2: Priority Distribution */}
-        <div className="p-5 rounded-xl bg-[#0F172A] border border-[#1E293B] flex flex-col justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-white">Priority Distribution</h2>
-            <p className="text-xs text-slate-400 mb-4">Explainable 0–100 risk score breakdown</p>
-            <div className="h-44 flex items-center justify-center">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={priorityPieData}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={45}
-                    outerRadius={65}
-                    paddingAngle={4}
-                  >
-                    {priorityPieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#161F38', borderColor: '#233054', borderRadius: '8px' }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="space-y-2 mt-2 pt-3 border-t border-[#1E293B]">
-            <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center text-slate-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 mr-2"></span>
-                Critical (Score &ge; 70)
-              </span>
-              <span className="font-semibold text-rose-400">{data.priority_distribution.high}</span>
-            </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center text-slate-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 mr-2"></span>
-                Medium (40–69)
-              </span>
-              <span className="font-semibold text-amber-400">{data.priority_distribution.medium}</span>
-            </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center text-slate-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 mr-2"></span>
-                Standard (&lt; 40)
-              </span>
-              <span className="font-semibold text-emerald-400">{data.priority_distribution.low}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Action Outcomes & Recent Activity Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Action Outcomes Summary */}
-        <div className="p-5 rounded-xl bg-[#0F172A] border border-[#1E293B]">
-          <h2 className="text-sm font-semibold text-white mb-1">Investigator Action Results</h2>
-          <p className="text-xs text-slate-400 mb-4">Confirmed sandbox & demo action logs</p>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="p-3 rounded-lg bg-emerald-950/30 border border-emerald-800/40 text-center">
-              <CheckCircle className="w-4 h-4 text-emerald-400 mx-auto mb-1" />
-              <div className="text-lg font-bold text-emerald-300">{data.action_outcomes_summary.success}</div>
-              <div className="text-[10px] text-emerald-400/80 font-medium">Executed</div>
-            </div>
-            <div className="p-3 rounded-lg bg-rose-950/30 border border-rose-800/40 text-center">
-              <XCircle className="w-4 h-4 text-rose-400 mx-auto mb-1" />
-              <div className="text-lg font-bold text-rose-300">{data.action_outcomes_summary.failed}</div>
-              <div className="text-[10px] text-rose-400/80 font-medium">Failed</div>
-            </div>
-            <div className="p-3 rounded-lg bg-blue-950/30 border border-blue-800/40 text-center">
-              <HelpCircle className="w-4 h-4 text-blue-400 mx-auto mb-1" />
-              <div className="text-lg font-bold text-blue-300">{data.action_outcomes_summary.pending}</div>
-              <div className="text-[10px] text-blue-400/80 font-medium">Pending Review</div>
-            </div>
-          </div>
-
-          <div className="mt-4 p-3 rounded-lg bg-[#161F38] border border-[#233054] text-[11px] text-slate-300">
-            <p className="font-semibold text-slate-200 mb-1">Human-in-the-Loop Safeguard</p>
-            <p className="text-slate-400">
-              ResolveIQ requires explicit investigator review and 2-step confirmation before any API submission to PayPal.
-            </p>
-          </div>
-        </div>
-
-        {/* Recent Activity Audit Feed */}
-        <div className="lg:col-span-2 p-5 rounded-xl bg-[#0F172A] border border-[#1E293B]">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-sm font-semibold text-white">Recent Case Activity</h2>
-              <p className="text-xs text-slate-400">Database audit trail stream</p>
-            </div>
-            <button
-              onClick={() => navigate('/audit')}
-              className="text-xs text-blue-400 hover:text-blue-300 font-medium flex items-center space-x-1"
-            >
-              <span>Full audit log</span>
-              <ArrowRight className="w-3 h-3" />
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            {data.recent_activity.map((evt) => (
-              <div
-                key={evt.id}
-                className="p-3 rounded-lg bg-[#161F38] border border-[#233054] flex items-center justify-between text-xs"
-              >
-                <div className="flex items-center space-x-3 min-w-0">
-                  <div className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" />
-                  <div className="min-w-0">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-mono text-blue-300 font-semibold">{evt.dispute_id || 'SYSTEM'}</span>
-                      <span className="text-slate-400">•</span>
-                      <span className="font-semibold text-slate-200">{evt.action.replace(/_/g, ' ')}</span>
-                    </div>
-                    <p className="text-slate-400 truncate text-[11px] mt-0.5">{evt.result_summary}</p>
+      {isManager && needOwner.length > 0 && (
+        <Card className="border-amber-400/30 p-5" aria-label="Nobody owns these yet">
+          <SectionTitle
+            title="Nobody owns these yet"
+            hint="Most urgent first. The score climbs every day, and a case nobody takes in its 5 days goes to the AI Agent to handle itself."
+            action={<Button size="sm" variant="ghost" onClick={() => navigate('/queue?view=unassigned')}>All {data?.unassigned_count ?? needOwner.length} <ArrowRight className="h-3.5 w-3.5" /></Button>}
+          />
+          <ul className="-mx-2 divide-y divide-line">
+            {needOwner.map((d) => (
+              <li key={d.id} className="flex flex-wrap items-center gap-4 px-2 py-3">
+                <button onClick={() => navigate(`/investigate/${d.id}`)} className="flex min-w-0 flex-1 items-center gap-4 text-left">
+                  <ScoreRing score={d.priority_score} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-[13px] font-medium text-white">{d.id}</span><span className="text-[13px] text-muted">{reasonLabel(d.reason)}</span></div>
+                    <p className="mt-0.5 truncate text-sm text-slate-300">{money(d.amount, d.currency)} · {d.buyer_claim ?? 'No buyer statement recorded.'}</p>
                   </div>
-                </div>
-                <div className="text-right flex-shrink-0 pl-3">
-                  <span className="text-[10px] text-slate-500 font-mono">
-                    {new Date(evt.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                </div>
-              </div>
+                  <DecideBy status={d.status} due={d.response_due_date} outcome={d.outcome} />
+                </button>
+                <AssignSelect disputeId={d.id} assignedTo={d.assigned_to} />
+              </li>
             ))}
+          </ul>
+        </Card>
+      )}
+
+      <section className={cn('grid grid-cols-1 gap-4 sm:grid-cols-2', isManager ? 'xl:grid-cols-5' : 'xl:grid-cols-4')}>
+        {!data ? (
+          Array.from({ length: isManager ? 5 : 4 }).map((_, i) => <Skeleton key={i} className="h-[132px] rounded-2xl" />)
+        ) : (
+          <>
+            {isManager
+              ? <Kpi label="High profile" value={data.high_profile_count} hint="Big amounts. These are yours" tone="warn" icon={<Star className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=high')} />
+              : <Kpi label="Your cases" value={data.my_cases_count} hint="Open cases you are working" tone="brand" icon={<FolderOpen className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=mine')} />}
+            {isManager && <Kpi label="Needs you" value={alerts.data?.open_alerts.length ?? 0} hint="Open alerts: strikes, flags and appeals" tone="danger" icon={<ShieldCheck className="h-[18px] w-[18px]" />} onClick={() => navigate('/team')} />}
+            <Kpi label="Decide within 48 hours" value={data.approaching_deadline_count} hint="Target date is close or passed" tone="warn" icon={<Clock className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=due')} />
+            <Kpi label="Waiting on replies" value={data.waiting_on_parties_count} hint="Seller or buyer owes us evidence" tone="danger" icon={<Hourglass className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=waiting')} />
+            <Kpi label="Ready to decide" value={data.awaiting_review_count} hint="Both sides have answered, or time is up. Decide now" tone="success" icon={<Gavel className="h-[18px] w-[18px]" />} onClick={() => navigate('/queue?view=ready')} />
+          </>
+        )}
+      </section>
+
+      {!isManager && data && data.my_cases_count === 0 && (() => {
+        const pending = myRequests.data?.find((r) => r.status === 'OPEN');
+        const last = myRequests.data?.find((r) => r.status === 'DECLINED');
+        return (
+          <Card className="p-5" aria-label="You have no cases">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-white">You have no cases right now</h2>
+                <p className="mt-0.5 max-w-xl text-[13px] text-muted">
+                  {pending ? 'You asked for more. Your manager has been alerted and will give you some.' : 'Your manager hands out cases. Ask for more and they will be alerted straight away.'}
+                  {!pending && last?.resolution_note && <> Last time: <span className="text-slate-300">{last.resolved_by}: {last.resolution_note}</span></>}
+                </p>
+              </div>
+              {pending ? <Badge tone="info" dot>Asked, waiting for your manager</Badge> : !asking && <Button variant="primary" onClick={() => setAsking(true)}>Ask for cases</Button>}
+            </div>
+            {asking && !pending && (
+              <div className="mt-4 flex flex-col gap-2 sm:max-w-lg animate-fade-in">
+                <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} aria-label="Message to your manager" placeholder="Optional. For example: I can take the harder ones." />
+                <div className="flex gap-2"><Button size="sm" variant="primary" loading={ask.isPending} onClick={() => ask.mutate()}>Send request</Button><Button size="sm" variant="ghost" onClick={() => setAsking(false)}>Cancel</Button></div>
+              </div>
+            )}
+          </Card>
+        );
+      })()}
+
+      {!isManager && (
+        <Card className="p-5" aria-label="Your strikes">
+          <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-3">
+            <div>
+              <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-white">Your strikes</h2>
+              <p className="mt-0.5 max-w-xl text-[13px] text-muted">
+                You get a strike when the AI reviewer overturns one of your decisions. Your manager is alerted every {user.notify_at} strikes, and your account is blocked at {user.block_at}.
+                {strikes > 0 && ' If you think the AI got a case wrong, flag it on that case.'}
+              </p>
+            </div>
+            <div className="w-full sm:w-64">
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className={cn('text-3xl font-semibold tabular', strikes >= user.notify_at ? 'text-amber-300' : 'text-white')}>{strikes}</span>
+                <span className="text-sm text-muted tabular">of {user.block_at}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-label="Your strikes" aria-valuenow={strikes} aria-valuemax={user.block_at}>
+                <div className={cn('h-full rounded-full transition-all duration-700', strikes >= user.block_at - 2 ? 'bg-rose-400' : strikes >= user.notify_at ? 'bg-amber-400' : 'bg-emerald-400')} style={{ width: `${Math.min(100, (strikes / user.block_at) * 100)}%` }} />
+              </div>
+              <p className="mt-1.5 text-xs text-muted">{strikes === 0 ? 'No strikes. Keep it up.' : strikes >= user.block_at - 2 ? `${user.block_at - strikes} more and your account is blocked.` : `${user.block_at - strikes} until your account is blocked.`}</p>
+            </div>
           </div>
-        </div>
-      </div>
-    </div>
+        </Card>
+      )}
+
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card className="p-6 lg:col-span-2">
+          <SectionTitle
+            title={isManager ? 'High-profile cases' : 'Needs attention now'}
+            hint={isManager ? 'Cases for big amounts. These are yours to handle' : 'Open disputes with the highest priority score, so you can decide what to chase first'}
+            action={<Button size="sm" variant="ghost" onClick={() => navigate(isManager ? '/queue?view=high' : '/queue')}>View all <ArrowRight className="h-3.5 w-3.5" /></Button>}
+          />
+          {urgent.isLoading ? (
+            <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16" />)}</div>
+          ) : top.length === 0 ? (
+            <EmptyState icon={<CheckCircle2 className="h-6 w-6" />} title="You're all caught up" hint="No open disputes need action right now." />
+          ) : (
+            <ul className="-mx-2 divide-y divide-line">
+              {top.map((d) => (
+                <li key={d.id}>
+                  <button
+                    onClick={() => navigate(`/investigate/${d.id}`)}
+                    className="flex w-full items-center gap-4 rounded-xl px-2 py-3.5 text-left transition hover:bg-white/[.03]"
+                  >
+                    <ScoreRing score={d.priority_score} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[13px] font-medium text-white">{d.id}</span>
+                        <span className="truncate text-[13px] text-muted">{reasonLabel(d.reason)}</span>
+                      </div>
+                      <p className="mt-0.5 truncate text-sm text-slate-300">{d.buyer_claim ?? 'No buyer statement recorded.'}</p>
+                    </div>
+                    <div className="hidden text-right sm:block">
+                      <div className="text-sm font-medium text-white tabular">{money(d.amount, d.currency)}</div>
+                      <div className="mt-1"><DecideBy status={d.status} due={d.response_due_date} outcome={d.outcome} /></div>
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card className="p-6">
+          <SectionTitle title="How urgent" hint="Open disputes by priority score" />
+          {!data ? <Skeleton className="h-40" /> : (
+            <>
+              <div className="flex h-3 gap-1 overflow-hidden rounded-full">
+                {prioRows.map((r) => (
+                  <div key={r.label} className={cn('transition-all duration-700', r.bar)} style={{ width: `${(r.value / prioTotal) * 100}%` }} title={`${r.label}: ${r.value}`} />
+                ))}
+              </div>
+              <ul className="mt-5 space-y-3">
+                {prioRows.map((r) => (
+                  <li key={r.label}>
+                    <button onClick={() => navigate(r.tone === 'danger' ? '/queue?view=urgent' : '/queue')} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm transition hover:bg-white/5">
+                      <span className="flex items-center gap-2.5 text-slate-300"><span className={cn('h-2.5 w-2.5 rounded-full', r.bar)} />{r.label}</span>
+                      <span className="font-semibold text-white tabular">{r.value}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </Card>
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card className="p-6">
+          <SectionTitle title="Disputes by reason" hint={data ? `${data.total_open_disputes} open` : undefined} />
+          {!data ? <Skeleton className="h-40" /> : (
+            <ul className="space-y-4">
+              {data.disputes_by_reason.map((r) => (
+                <li key={r.reason}>
+                  <div className="mb-1.5 flex justify-between text-sm">
+                    <span className="text-slate-300">{reasonLabel(r.reason)}</span>
+                    <span className="font-medium text-white tabular">{r.count}</span>
+                  </div>
+                  <Meter value={(r.count / totalReasons) * 100} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card className="p-6 lg:col-span-2">
+          <SectionTitle
+            title="Recent activity"
+            hint="Latest events from the activity log"
+            action={<Button size="sm" variant="ghost" onClick={() => navigate('/audit')}>See all <ArrowRight className="h-3.5 w-3.5" /></Button>}
+          />
+          {data && (
+            <div className="mb-5 grid grid-cols-3 gap-3">
+              {([
+                ['Done', data.action_outcomes_summary.success, 'text-emerald-300', <CheckCircle2 key="a" className="h-4 w-4" />],
+                ['Failed', data.action_outcomes_summary.failed, 'text-rose-300', <XCircle key="b" className="h-4 w-4" />],
+                ['Awaiting approval', data.action_outcomes_summary.pending, 'text-sky-300', <AlertTriangle key="c" className="h-4 w-4" />],
+              ] as const).map(([label, n, color, icon]) => (
+                <div key={label} className="rounded-xl border border-line bg-raised/60 p-3">
+                  <div className={cn('flex items-center gap-1.5 text-xs font-medium', color)}>{icon}{label}</div>
+                  <div className="mt-1 text-2xl font-semibold text-white tabular">{n}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {!data ? <Skeleton className="h-32" /> : data.recent_activity.length === 0 ? (
+            <EmptyState title="No activity yet" />
+          ) : (
+            <ul className="space-y-1">
+              {data.recent_activity.map((evt) => (
+                <li key={evt.id}>
+                  <button
+                    onClick={() => evt.dispute_id && navigate(`/investigate/${evt.dispute_id}`)}
+                    className="flex w-full items-start gap-3 rounded-xl px-2 py-2.5 text-left transition hover:bg-white/[.03]"
+                  >
+                    <span className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', evt.status === 'FAILED' ? 'bg-rose-400' : evt.status === 'SUCCESS' ? 'bg-emerald-400' : 'bg-sky-400')} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="font-medium text-white">{String(evt.action).replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c: string) => c.toUpperCase())}</span>
+                        {evt.dispute_id && <span className="font-mono text-xs text-muted">{evt.dispute_id}</span>}
+                      </div>
+                      <p className="truncate text-[13px] text-muted">{evt.result_summary}</p>
+                    </div>
+                    <span className="shrink-0 text-xs text-muted">{timeAgo(evt.created_at, now)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </section>
+      {isManager && <DistributeDialog open={distributing} onClose={() => setDistributing(false)} />}
+    </>
   );
 }

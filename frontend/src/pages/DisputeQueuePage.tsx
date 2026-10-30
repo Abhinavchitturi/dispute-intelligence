@@ -1,419 +1,311 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import {
-  Search,
-  Filter,
-  ArrowUpDown,
-  ChevronRight,
-  Info,
-  Clock,
-  AlertCircle,
-  HelpCircle,
-  CheckCircle2,
-  XCircle,
-  FileText
-} from 'lucide-react';
-import { fetchDisputes } from '../api/client';
-import { DisputeSummary, PriorityFactor } from '../types';
-import { PriorityBadge, StatusBadge, EvidenceBadge, SourceBadge } from '../components/ui/StatusBadges';
+import { ArrowDownUp, ChevronRight, Eye, FilterX, Gavel, Inbox, RefreshCw, Share2 } from 'lucide-react';
+import { fetchDisputeDetail, fetchDisputes } from '../api/client';
+import { AssignSelect } from '../components/AssignSelect';
+import { DistributeDialog } from '../components/DistributeDialog';
+import { DisputeSummary } from '../types';
+import { Badge, Button, Card, Drawer, EmptyState, ErrorState, KeyValue, Meter, PageHeader, SearchInput, Segmented, Select, Skeleton } from '../components/ui/kit';
+import { EvidenceBadge, StatusBadge } from '../components/ui/StatusBadges';
+import { DecideBy, Countdown, ScoreRing } from '../components/DisputeBits';
+import { cn, isUrgent, money, OPEN_STATUSES, reasonLabel, timeLeft, WAITING_STATUSES } from '../lib/format';
+import { useDebounced, useNow } from '../lib/hooks';
+import { useCurrentUser } from '../lib/user';
+
+type View = 'all' | 'mine' | 'high' | 'unassigned' | 'ai' | 'progress' | 'new' | 'waiting' | 'ready' | 'review' | 'urgent' | 'due';
+const VIEWS: View[] = ['all', 'mine', 'high', 'unassigned', 'ai', 'progress', 'new', 'waiting', 'ready', 'review', 'urgent', 'due'];
+const SORTS = {
+  priority: { by: 'priority_score', order: 'desc', label: 'Most urgent' },
+  amount: { by: 'amount', order: 'desc', label: 'Highest amount' },
+  deadline: { by: 'response_due_date', order: 'asc', label: 'Soonest deadline' },
+} as const;
+type SortKey = keyof typeof SORTS;
+
+const REASON_OPTIONS = [
+  'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', 'MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED',
+  'UNAUTHORISED', 'CANCELLED_OR_RETURNED', 'DUPLICATE_TRANSACTION',
+];
+
+function matchesView(d: DisputeSummary, view: View, now: number, me: string) {
+  switch (view) {
+    case 'mine': return d.assigned_to === me || (d.collaborators ?? []).includes(me); // owned or shared with you; open or finished, so a case you decided doesn't vanish
+    case 'unassigned': return OPEN_STATUSES.includes(d.status) && !d.assigned_to;
+    case 'ai': return OPEN_STATUSES.includes(d.status) && d.ai_owned;
+    case 'high': return OPEN_STATUSES.includes(d.status) && d.is_high_profile;
+    case 'review': return d.status === 'PENDING_AI_REVIEW';
+    case 'new': return d.status === 'OPEN';
+    case 'progress': return d.status === 'IN_PROGRESS';
+    case 'waiting': return WAITING_STATUSES.includes(d.status);
+    case 'ready': return d.status === 'UNDER_REVIEW';
+    case 'urgent': return OPEN_STATUSES.includes(d.status) && isUrgent(d.priority_score);
+    case 'due': { const h = timeLeft(d.response_due_date, now).hours; return OPEN_STATUSES.includes(d.status) && h !== null && h <= 48; }
+    default: return true;
+  }
+}
 
 export function DisputeQueuePage() {
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const now = useNow();
+  const { user, isManager } = useCurrentUser();
+  const [params, setParams] = useSearchParams();
+  const [distributing, setDistributing] = useState(false);
 
-  const [search, setSearch] = useState(searchParams.get('search') || '');
-  const [status, setStatus] = useState(searchParams.get('status') || 'ALL');
-  const [reason, setReason] = useState(searchParams.get('reason') || 'ALL');
-  const [priorityLevel, setPriorityLevel] = useState(searchParams.get('priority_level') || 'ALL');
-  const [evidenceStatus, setEvidenceStatus] = useState(searchParams.get('evidence_status') || 'ALL');
-  const [source, setSource] = useState(searchParams.get('source') || 'ALL');
-  const [sortBy, setSortBy] = useState('priority_score');
-  const [sortOrder, setSortOrder] = useState('desc');
-  const [selectedFactors, setSelectedFactors] = useState<{ disputeId: string; factors: PriorityFactor[] } | null>(null);
+  const initialView: View = VIEWS.includes(params.get('view') as View) ? (params.get('view') as View) : params.get('priority_level') === 'high' ? 'urgent' : 'all';
 
-  const { data: disputes, isLoading, error } = useQuery({
-    queryKey: ['disputes', search, status, reason, priorityLevel, evidenceStatus, source, sortBy, sortOrder],
-    queryFn: () =>
-      fetchDisputes({
-        search,
-        status,
-        reason,
-        priority_level: priorityLevel,
-        evidence_status: evidenceStatus,
-        source,
-        sort_by: sortBy,
-        sort_order: sortOrder,
-      }),
+  const [view, setView] = useState<View>(initialView);
+  const [search, setSearch] = useState(params.get('q') || params.get('search') || '');
+  const [reason, setReason] = useState(params.get('reason') || 'ALL');
+  const [status, setStatus] = useState(params.get('status') || 'ALL');
+  const [sort, setSort] = useState<SortKey>((params.get('sort') as SortKey) in SORTS ? (params.get('sort') as SortKey) : 'priority');
+  const openId = params.get('open');
+  const dq = useDebounced(search, 250);
+
+  // Keep the URL shareable.
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (view !== 'all') next.set('view', view);
+    if (dq) next.set('q', dq);
+    if (reason !== 'ALL') next.set('reason', reason);
+    if (status !== 'ALL') next.set('status', status);
+    if (sort !== 'priority') next.set('sort', sort);
+    if (openId) next.set('open', openId);
+    setParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, dq, reason, status, sort, openId]);
+
+  const { data, isLoading, isFetching, error, refetch } = useQuery({
+    queryKey: ['disputes', dq, reason, status, sort],
+    queryFn: () => fetchDisputes({ search: dq, reason, status, sort_by: SORTS[sort].by, sort_order: SORTS[sort].order }),
+    refetchInterval: 30_000,
+    placeholderData: (prev) => prev,
   });
 
-  const handleResetFilters = () => {
-    setSearch('');
-    setStatus('ALL');
-    setReason('ALL');
-    setPriorityLevel('ALL');
-    setEvidenceStatus('ALL');
-    setSource('ALL');
-    setSortBy('priority_score');
-    setSortOrder('desc');
-    setSearchParams({});
-  };
+  const counts = useMemo(() => {
+    const list = data ?? [];
+    const c = (v: View) => list.filter((d) => matchesView(d, v, now, user.name)).length;
+    return { all: list.length, mine: c('mine'), high: c('high'), unassigned: c('unassigned'), ai: c('ai'), progress: c('progress'), new: c('new'), waiting: c('waiting'), ready: c('ready'), review: c('review'), urgent: c('urgent'), due: c('due') };
+  }, [data, now, user.name]);
 
-  const formatDeadline = (dueStr: string | null) => {
-    if (!dueStr) return <span className="text-slate-500 font-mono text-xs">Unknown</span>;
-    const due = new Date(dueStr);
-    const now = new Date();
-    const diffHours = (due.getTime() - now.getTime()) / (1000 * 3600);
+  const rows = useMemo(() => (data ?? []).filter((d) => matchesView(d, view, now, user.name)), [data, view, now, user.name]);
+  const filtered = view !== 'all' || !!dq || reason !== 'ALL' || status !== 'ALL';
+  const clearAll = () => { setView('all'); setSearch(''); setReason('ALL'); setStatus('ALL'); setSort('priority'); };
 
-    if (diffHours < 0) {
-      return <span className="text-rose-400 font-semibold text-xs flex items-center"><AlertCircle className="w-3 h-3 mr-1" /> Expired</span>;
-    }
-    if (diffHours <= 24) {
-      return <span className="text-rose-400 font-semibold text-xs flex items-center"><Clock className="w-3 h-3 mr-1" /> {diffHours.toFixed(0)}h remaining</span>;
-    }
-    if (diffHours <= 48) {
-      return <span className="text-amber-400 font-medium text-xs flex items-center"><Clock className="w-3 h-3 mr-1" /> {(diffHours / 24).toFixed(1)}d remaining</span>;
-    }
-    return <span className="text-slate-300 text-xs">{(diffHours / 24).toFixed(0)} days</span>;
+  const setOpen = (id: string | null) => {
+    const next = new URLSearchParams(params);
+    id ? next.set('open', id) : next.delete('open');
+    setParams(next, { replace: true });
   };
 
   return (
-    <div className="space-y-5">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-white tracking-tight">Dispute Investigation Queue</h1>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Prioritized workbench table with verified source records and explainable scoring.
-          </p>
-        </div>
-        <div className="flex items-center space-x-2">
-          <span className="text-xs text-slate-400 font-mono">
-            {disputes ? `${disputes.length} cases loaded` : 'Loading...'}
-          </span>
-        </div>
-      </div>
+    <>
+      <PageHeader
+        title={isManager ? 'All Disputes' : 'Your cases'}
+        subtitle={isManager
+          ? 'Every case, most urgent first. Search by case, buyer, seller or transaction. Click a dispute to investigate it, or use the eye for a quick look.'
+          : 'The cases you are working, most urgent first, including any a colleague has shared with you. Click one to investigate it, or use the eye for a quick look.'}
+        actions={<>
+          {isManager && <Button size="sm" variant="primary" onClick={() => setDistributing(true)}><Share2 className="h-4 w-4" />Distribute cases</Button>}
+          <Button size="sm" onClick={() => refetch()} aria-label="Refresh disputes">
+            <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} /> Refresh
+          </Button>
+        </>}
+      />
 
-      {/* Filter and Search Bar */}
-      <div className="p-4 rounded-xl bg-[#0F172A] border border-[#1E293B] space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-          {/* Search Box */}
-          <div className="relative lg:col-span-2">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Filter by Case, Txn, Buyer, Merchant..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-[#161F38] border border-[#233054] rounded-lg text-xs text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-500"
-            />
+      <div className="space-y-4">
+        <Segmented
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'all', label: 'All', count: counts.all },
+            ...(isManager ? [{ value: 'mine' as View, label: 'Your cases', count: counts.mine }, { value: 'high' as View, label: 'High profile', count: counts.high }, { value: 'unassigned' as View, label: 'Unassigned', count: counts.unassigned }, { value: 'ai' as View, label: 'With the AI Agent', count: counts.ai }] : []),
+            { value: 'new', label: 'New', count: counts.new },
+            { value: 'waiting', label: 'Waiting on replies', count: counts.waiting },
+            { value: 'progress', label: 'In progress', count: counts.progress },
+            { value: 'ready', label: 'Ready to decide', count: counts.ready },
+            { value: 'review', label: 'With AI review', count: counts.review },
+            { value: 'urgent', label: 'Urgent', count: counts.urgent },
+            { value: 'due', label: 'Due soon', count: counts.due },
+          ]}
+        />
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_200px_200px_190px_auto]">
+          <SearchInput value={search} onChange={setSearch} placeholder="Search case, buyer, seller or transaction" />
+          <Select value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Filter by reason">
+            <option value="ALL">All reasons</option>
+            {REASON_OPTIONS.map((r) => <option key={r} value={r}>{reasonLabel(r)}</option>)}
+          </Select>
+          <Select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by status">
+            <option value="ALL">All statuses</option>
+            <option value="OPEN">New</option>
+            <option value="WAITING_FOR_SELLER_RESPONSE">Waiting on seller</option>
+            <option value="WAITING_FOR_BUYER_RESPONSE">Waiting on buyer</option>
+            <option value="WAITING_FOR_BOTH_RESPONSES">Waiting on both</option>
+            <option value="IN_PROGRESS">In progress</option>
+            <option value="UNDER_REVIEW">Ready to decide</option>
+            <option value="PENDING_AI_REVIEW">With AI review</option>
+            <option value="RESOLVED">Resolved</option>
+            <option value="CLOSED">Closed</option>
+          </Select>
+          <div className="relative">
+            <ArrowDownUp className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+            <Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="h-full pl-10" aria-label="Sort disputes">
+              {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </Select>
           </div>
-
-          {/* Status Filter */}
-          <div>
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="w-full px-3 py-2 bg-[#161F38] border border-[#233054] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="WAITING_FOR_SELLER_RESPONSE">Action Needed (Seller)</option>
-              <option value="WAITING_FOR_BUYER_RESPONSE">Awaiting Buyer</option>
-              <option value="UNDER_REVIEW">Under Review</option>
-              <option value="RESOLVED">Resolved</option>
-              <option value="CLOSED">Closed</option>
-            </select>
-          </div>
-
-          {/* Reason Filter */}
-          <div>
-            <select
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full px-3 py-2 bg-[#161F38] border border-[#233054] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-            >
-              <option value="ALL">All Reasons</option>
-              <option value="MERCHANDISE_OR_SERVICE_NOT_RECEIVED">Item Not Received</option>
-              <option value="MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED">Item Not As Described</option>
-              <option value="UNAUTHORISED">Unauthorized Claim</option>
-              <option value="CANCELLED_OR_RETURNED">Cancelled or Returned</option>
-              <option value="DUPLICATE_TRANSACTION">Duplicate Charge</option>
-            </select>
-          </div>
-
-          {/* Priority Level */}
-          <div>
-            <select
-              value={priorityLevel}
-              onChange={(e) => setPriorityLevel(e.target.value)}
-              className="w-full px-3 py-2 bg-[#161F38] border border-[#233054] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-            >
-              <option value="ALL">All Priorities</option>
-              <option value="high">Critical (Score &ge; 70)</option>
-              <option value="medium">Medium (40–69)</option>
-              <option value="low">Standard (&lt; 40)</option>
-            </select>
-          </div>
-
-          {/* Evidence Completeness */}
-          <div>
-            <select
-              value={evidenceStatus}
-              onChange={(e) => setEvidenceStatus(e.target.value)}
-              className="w-full px-3 py-2 bg-[#161F38] border border-[#233054] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-            >
-              <option value="ALL">All Evidence States</option>
-              <option value="COMPLETE">Complete</option>
-              <option value="CONFLICTING">Conflicting Records</option>
-              <option value="MISSING">Missing Docs</option>
-              <option value="PARTIAL">Partial</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Sort Controls & Reset */}
-        <div className="flex items-center justify-between pt-2 border-t border-[#1E293B] text-xs">
-          <div className="flex items-center space-x-3">
-            <span className="text-slate-400">Sort by:</span>
-            <button
-              onClick={() => {
-                if (sortBy === 'priority_score') {
-                  setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-                } else {
-                  setSortBy('priority_score');
-                  setSortOrder('desc');
-                }
-              }}
-              className={`px-2.5 py-1 rounded border text-xs font-medium flex items-center space-x-1 ${
-                sortBy === 'priority_score'
-                  ? 'bg-blue-600 text-white border-blue-500'
-                  : 'bg-[#161F38] text-slate-300 border-[#233054]'
-              }`}
-            >
-              <span>Priority Score</span>
-              <ArrowUpDown className="w-3 h-3" />
-            </button>
-            <button
-              onClick={() => {
-                if (sortBy === 'amount') {
-                  setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-                } else {
-                  setSortBy('amount');
-                  setSortOrder('desc');
-                }
-              }}
-              className={`px-2.5 py-1 rounded border text-xs font-medium flex items-center space-x-1 ${
-                sortBy === 'amount'
-                  ? 'bg-blue-600 text-white border-blue-500'
-                  : 'bg-[#161F38] text-slate-300 border-[#233054]'
-              }`}
-            >
-              <span>Amount</span>
-              <ArrowUpDown className="w-3 h-3" />
-            </button>
-            <button
-              onClick={() => {
-                if (sortBy === 'response_due_date') {
-                  setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-                } else {
-                  setSortBy('response_due_date');
-                  setSortOrder('asc');
-                }
-              }}
-              className={`px-2.5 py-1 rounded border text-xs font-medium flex items-center space-x-1 ${
-                sortBy === 'response_due_date'
-                  ? 'bg-blue-600 text-white border-blue-500'
-                  : 'bg-[#161F38] text-slate-300 border-[#233054]'
-              }`}
-            >
-              <span>Deadline</span>
-              <ArrowUpDown className="w-3 h-3" />
-            </button>
-          </div>
-
-          <button
-            onClick={handleResetFilters}
-            className="text-slate-400 hover:text-white underline text-xs"
-          >
-            Clear all filters
-          </button>
+          {filtered && (
+            <Button variant="ghost" onClick={clearAll}><FilterX className="h-4 w-4" /> Clear</Button>
+          )}
         </div>
       </div>
 
-      {/* Main Table */}
-      <div className="rounded-xl bg-[#0F172A] border border-[#1E293B] overflow-hidden shadow-lg">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="bg-[#161F38] text-slate-300 font-semibold border-b border-[#233054]">
-                <th className="py-3 px-4">Case ID</th>
-                <th className="py-3 px-4">Dispute Reason</th>
-                <th className="py-3 px-4">Buyer & Merchant</th>
-                <th className="py-3 px-4">Disputed Amount</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4">Response Due</th>
-                <th className="py-3 px-4">Evidence Status</th>
-                <th className="py-3 px-4">Priority (0-100)</th>
-                <th className="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#1E293B]">
-              {isLoading && (
-                <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-400">
-                    <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                    Loading cases from database...
-                  </td>
-                </tr>
-              )}
-
-              {error && (
-                <tr>
-                  <td colSpan={9} className="py-8 text-center text-rose-400">
-                    Failed to query dispute database. Check network or server status.
-                  </td>
-                </tr>
-              )}
-
-              {!isLoading && disputes && disputes.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="py-16 text-center text-slate-400">
-                    <AlertCircle className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-                    <p className="text-sm font-semibold text-slate-300">No disputes match the selected filters.</p>
-                    <p className="text-xs text-slate-500 mt-1">Try broadening your search term or resetting filters.</p>
-                    <button
-                      onClick={handleResetFilters}
-                      className="mt-3 px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-medium"
-                    >
-                      Reset filters
-                    </button>
-                  </td>
-                </tr>
-              )}
-
-              {!isLoading &&
-                disputes &&
-                disputes.map((d) => (
-                  <tr
-                    key={d.id}
-                    onClick={() => navigate(`/investigate/${d.id}`)}
-                    className="hover:bg-[#161F38]/60 cursor-pointer transition group"
-                  >
-                    {/* Case ID */}
-                    <td className="py-3.5 px-4 font-mono font-semibold text-blue-400 group-hover:text-blue-300">
-                      <div>{d.id}</div>
-                      <div className="text-[10px] text-slate-500 font-normal mt-0.5">
-                        {d.transaction_id || 'NO_TXN'}
-                      </div>
-                    </td>
-
-                    {/* Reason */}
-                    <td className="py-3.5 px-4">
-                      <div className="font-medium text-slate-200">
-                        {d.reason.replace(/MERCHANDISE_OR_SERVICE_/g, '').replace(/_/g, ' ')}
-                      </div>
-                      <div className="text-[11px] text-slate-400 line-clamp-1 mt-0.5 max-w-xs">
-                        {d.buyer_claim || 'No buyer statement recorded.'}
-                      </div>
-                    </td>
-
-                    {/* Buyer & Merchant */}
-                    <td className="py-3.5 px-4">
-                      <div className="text-slate-200 font-medium">{d.buyer_reference || 'Fictional Buyer'}</div>
-                      <div className="text-[11px] text-slate-400">{d.merchant_reference || 'Unknown Merchant'}</div>
-                    </td>
-
-                    {/* Amount */}
-                    <td className="py-3.5 px-4 font-mono font-medium text-slate-100">
-                      {d.currency} {d.amount.toFixed(2)}
-                    </td>
-
-                    {/* Status */}
-                    <td className="py-3.5 px-4">
-                      <StatusBadge status={d.status} />
-                    </td>
-
-                    {/* Response Due */}
-                    <td className="py-3.5 px-4">
-                      {formatDeadline(d.response_due_date)}
-                    </td>
-
-                    {/* Evidence Completeness */}
-                    <td className="py-3.5 px-4">
-                      <EvidenceBadge status={d.evidence_status} />
-                    </td>
-
-                    {/* Priority */}
-                    <td className="py-3.5 px-4">
-                      <div className="flex items-center space-x-2">
-                        <PriorityBadge score={d.priority_score} />
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedFactors({ disputeId: d.id, factors: d.priority_factors });
-                          }}
-                          className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50"
-                          title="Inspect priority score factors"
-                        >
-                          <Info className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-
-                    {/* Actions */}
-                    <td className="py-3.5 px-4 text-right">
-                      <span className="inline-flex items-center text-xs text-blue-400 group-hover:text-blue-300 font-medium">
-                        Investigate <ChevronRight className="w-3.5 h-3.5 ml-0.5" />
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Priority Factors Modal */}
-      {selectedFactors && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#0F172A] border border-[#233054] rounded-xl max-w-lg w-full p-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[#1E293B] pb-3 mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-white">Priority Score Breakdown</h3>
-                <p className="text-xs text-slate-400">Explainable scoring factors for Case {selectedFactors.disputeId}</p>
-              </div>
-              <button
-                onClick={() => setSelectedFactors(null)}
-                className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded bg-[#161F38]"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              {selectedFactors.factors.map((f, i) => (
-                <div key={i} className="p-3 rounded-lg bg-[#161F38] border border-[#233054] text-xs">
-                  <div className="flex items-center justify-between font-semibold text-slate-200 mb-1">
-                    <span>{f.name}</span>
-                    <span className="text-blue-400 font-mono">+{f.contribution.toFixed(1)} pts</span>
-                  </div>
-                  <p className="text-slate-400 text-[11px] leading-relaxed">{f.explanation}</p>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-4 pt-3 border-t border-[#1E293B] flex justify-end">
-              <button
-                onClick={() => setSelectedFactors(null)}
-                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-semibold"
-              >
-                Done
-              </button>
-            </div>
-          </div>
+      {view === 'ready' && (
+        <div role="note" className="flex items-start gap-3 rounded-2xl border border-brand/30 bg-brand/10 p-4 text-sm text-slate-100">
+          <Gavel aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-brand-soft" />
+          <p><span className="font-medium text-white">Time to decide.</span> Every request is answered, or its reply deadline has passed. Open a case, check what arrived and what is missing, then make the call.</p>
         </div>
       )}
-    </div>
+
+      {error ? (
+        <ErrorState message="Couldn't load disputes." onRetry={() => refetch()} />
+      ) : (
+        <Card className="overflow-hidden">
+          {isLoading ? (
+            <div className="space-y-px">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[76px] rounded-none" />)}</div>
+          ) : rows.length === 0 ? (
+            <EmptyState
+              icon={<Inbox className="h-6 w-6" />}
+              title="No disputes match"
+              hint="Try a different search or clear the filters."
+              action={<Button onClick={clearAll}>Clear filters</Button>}
+            />
+          ) : (
+            <ul className={cn('divide-y divide-line transition-opacity', isFetching && 'opacity-80')}>
+              {rows.map((d) => (
+                <li key={d.id} className={cn('flex items-center transition hover:bg-white/[.03]', openId === d.id && 'bg-brand/[.06]')}>
+                  {/* Clicking a dispute opens it in Investigation. The eye is a quick peek that doesn't leave the list. */}
+                  <button
+                    onClick={() => navigate(`/investigate/${d.id}`)}
+                    className="group flex min-w-0 flex-1 items-center gap-4 px-5 py-4 text-left"
+                  >
+                    <ScoreRing score={d.priority_score} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="font-mono text-[13px] font-semibold text-white">{d.id}</span>
+                        <span className="text-[13px] text-muted">{reasonLabel(d.reason)}</span>
+                        {d.is_high_profile && <Badge tone="warn">High profile</Badge>}
+                      </div>
+                      <p className="mt-0.5 truncate text-sm text-slate-300">
+                        {d.buyer_reference ?? 'Buyer'} <span className="text-muted">vs {d.merchant_reference ?? 'Seller'}</span>
+                        {d.buyer_claim && <span className="text-muted"> · “{d.buyer_claim}”</span>}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted">{d.ai_owned ? 'With the AI Agent. Nobody took it in time.' : d.assigned_to ? (d.assigned_to === user.name ? 'Yours' : `Owner: ${d.assigned_to}`) : 'Unassigned'}{(d.collaborators ?? []).length > 0 && <span> · Shared with {d.collaborators.join(', ')}</span>}</p>
+                    </div>
+                    <div className="hidden w-40 flex-col items-start gap-1.5 lg:flex">
+                      <StatusBadge status={d.status} />
+                      <EvidenceBadge status={d.evidence_status} />
+                    </div>
+                    <div className="hidden w-36 text-right md:block">
+                      <div className="text-sm font-semibold text-white tabular">{money(d.amount, d.currency)}</div>
+                      <div className="mt-1 flex justify-end"><DecideBy status={d.status} due={d.response_due_date} outcome={d.outcome} /></div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted transition group-hover:translate-x-0.5 group-hover:text-white" />
+                  </button>
+                  {isManager && OPEN_STATUSES.includes(d.status) && <div className="mr-2 hidden shrink-0 md:block"><AssignSelect disputeId={d.id} assignedTo={d.assigned_to} /></div>}
+                  <button
+                    onClick={() => setOpen(d.id)}
+                    aria-label={`Quick view ${d.id}`}
+                    title="Quick view"
+                    className="mr-4 shrink-0 rounded-lg p-2 text-muted transition hover:bg-white/5 hover:text-white"
+                  >
+                    <Eye className="h-4 w-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
+      {!isLoading && rows.length > 0 && <p className="text-[13px] text-muted">Showing {rows.length} of {counts.all} disputes</p>}
+
+      <DistributeDialog open={distributing} onClose={() => setDistributing(false)} />
+      <PreviewDrawer id={openId} onClose={() => setOpen(null)} onOpenCase={(id) => navigate(`/investigate/${id}`)} />
+    </>
+  );
+}
+
+function PreviewDrawer({ id, onClose, onOpenCase }: { id: string | null; onClose: () => void; onOpenCase: (id: string) => void }) {
+  const { data: d, isLoading } = useQuery({
+    queryKey: ['disputeDetail', id],
+    queryFn: () => fetchDisputeDetail(id!),
+    enabled: !!id,
+  });
+
+  return (
+    <Drawer
+      open={!!id}
+      onClose={onClose}
+      title={
+        <div>
+          <div className="font-mono text-lg font-semibold text-white">{id}</div>
+          {d && <div className="mt-1.5 flex flex-wrap items-center gap-2"><StatusBadge status={d.status} /><Badge>{reasonLabel(d.reason)}</Badge></div>}
+        </div>
+      }
+      footer={<Button variant="primary" className="w-full" onClick={() => id && onOpenCase(id)}>Open full case <ChevronRight className="h-4 w-4" /></Button>}
+    >
+      {isLoading || !d ? (
+        <div className="space-y-4"><Skeleton className="h-20" /><Skeleton className="h-32" /><Skeleton className="h-32" /></div>
+      ) : (
+        <>
+          <div className="flex items-center gap-4 rounded-2xl border border-line bg-raised/60 p-4">
+            <ScoreRing score={d.priority_score} size={56} />
+            <div className="flex-1">
+              <div className="text-2xl font-semibold text-white tabular">{money(d.amount, d.currency)}</div>
+              <div className="mt-1"><DecideBy status={d.status} due={d.response_due_date} outcome={d.outcome} /></div>
+            </div>
+          </div>
+
+          {d.buyer_claim && (
+            <blockquote className="rounded-xl border-l-2 border-brand bg-raised/60 px-4 py-3 text-sm italic text-slate-200">“{d.buyer_claim}”</blockquote>
+          )}
+
+          <dl className="grid grid-cols-2 gap-4">
+            <KeyValue label="Buyer">{d.buyer_reference ?? '—'}</KeyValue>
+            <KeyValue label="Seller">{d.merchant_reference ?? '—'}</KeyValue>
+            <KeyValue label="Transaction" mono>{d.transaction_id ?? '—'}</KeyValue>
+            <KeyValue label="Evidence"><EvidenceBadge status={d.evidence_status} /></KeyValue>
+            <KeyValue label="Owner">{d.assigned_to ?? 'Unassigned'}</KeyValue>
+          </dl>
+
+          <section>
+            <h3 className="mb-2 text-sm font-semibold text-white">Evidence ({d.evidence_items.length})</h3>
+            <ul className="space-y-2">
+              {d.evidence_items.map((ev) => (
+                <li key={ev.id} className="flex items-center justify-between gap-3 rounded-xl border border-line bg-raised/40 px-3 py-2.5 text-sm">
+                  <span className="text-slate-200">{ev.evidence_type.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())}</span>
+                  <EvidenceBadge status={ev.availability_status} />
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-sm font-semibold text-white">Why this priority</h3>
+            <ul className="space-y-3">
+              {d.priority_factors.map((f) => (
+                <li key={f.name}>
+                  <div className="mb-1 flex justify-between text-[13px]">
+                    <span className="text-slate-200">{f.name}</span>
+                    <span className="font-mono text-brand-soft">+{f.contribution.toFixed(1)}</span>
+                  </div>
+                  <Meter value={f.contribution} />
+                  <p className="mt-1 text-xs text-muted">{f.explanation}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
+      )}
+    </Drawer>
   );
 }

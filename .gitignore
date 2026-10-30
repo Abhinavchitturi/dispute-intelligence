@@ -13,7 +13,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# Anchored to the repo root. A bare "lib/" also hid frontend/src/lib/ (the app's helpers), so a fresh clone wouldn't build.
+/lib/
 lib64/
 parts/
 sdist/

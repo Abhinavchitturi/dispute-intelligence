@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Boolean, Column, String, Float, Integer, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from backend.app.database import Base
@@ -25,6 +25,31 @@ class Dispute(Base):
     priority_factors_json = Column(Text, nullable=True)
     buyer_claim = Column(Text, nullable=True)
     evidence_status = Column(String(64), default="PENDING")  # COMPLETE, PARTIAL, MISSING, CONFLICTING
+    outcome = Column(String(32), nullable=True)  # set when PayPal decides: BUYER_FAVOR, SELLER_FAVOR, SETTLED or DISMISSED
+
+    # Who is working the case, and the investigator's proposed decision while an admin reviews it.
+    assigned_to = Column(String(128), nullable=True)
+    proposed_outcome = Column(String(32), nullable=True)    # BUYER_FAVOR or SELLER_FAVOR
+    proposed_reason = Column(Text, nullable=True)
+    proposed_by = Column(String(128), nullable=True)
+    proposed_at = Column(DateTime, nullable=True)
+    review_note = Column(Text, nullable=True)               # the admin's note when sending a case back or overriding
+    reviewed_by = Column(String(128), nullable=True)
+    # Each side can say the dispute was settled outside PayPal. It is only settled when both say so.
+    seller_settled_at = Column(DateTime, nullable=True)
+    buyer_settled_at = Column(DateTime, nullable=True)
+    # Who made the final call, and the people watching the case.
+    decided_by = Column(String(16), nullable=True)           # INVESTIGATOR (AI approved), AI (AI overturned) or MANAGER
+    ai_verdict = Column(String(12), nullable=True)           # APPROVE or OVERTURN, from the AI reviewer
+    ai_rationale = Column(Text, nullable=True)
+    manager_assigned = Column(String(128), nullable=True)    # a manager who has joined this case (appeals)
+    buyer_email = Column(String(255), nullable=True)
+    seller_email = Column(String(255), nullable=True)
+    parent_dispute_id = Column(String(64), nullable=True, index=True)   # set on an appeal: the case it appeals
+    appeal_number = Column(Integer, nullable=True)
+    # Set when nobody took the case before its deadline, so the AI Agent handles the whole case.
+    ai_owned = Column(Boolean, default=False)
+    ai_owned_at = Column(DateTime, nullable=True)
 
     # Relationships
     transaction = relationship("Transaction", back_populates="dispute", uselist=False)
@@ -32,6 +57,7 @@ class Dispute(Base):
     evidence_items = relationship("Evidence", back_populates="dispute", cascade="all, delete-orphan")
     briefs = relationship("InvestigationBrief", back_populates="dispute", cascade="all, delete-orphan")
     audit_events = relationship("AuditEvent", back_populates="dispute", cascade="all, delete-orphan")
+    messages = relationship("DisputeMessage", back_populates="dispute", cascade="all, delete-orphan", order_by="DisputeMessage.created_at")
 
 class Transaction(Base):
     __tablename__ = "transactions"

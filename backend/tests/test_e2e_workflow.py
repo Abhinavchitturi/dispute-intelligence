@@ -77,48 +77,40 @@ def test_full_e2e_investigation_scenario():
     assert top_match["similarity_score"] > 60.0
     assert len(top_match["matching_factors"]) > 0
 
-    # 6. Step 6: Investigator previews action
-    preview_resp = client.post(
-        "/api/disputes/DEMO-DSP-1042/actions/preview",
-        json={
-            "action_type": "PROVIDE_EVIDENCE",
-            "notes": "Verified carrier postal depot scan matches postal sector.",
-            "carrier": "UPS",
-            "tracking_number": "1Z9999999999999999"
-        }
-    )
+    # 6. Step 6: Investigator previews asking the seller for the evidence the brief says is missing
+    ask = {"requested_evidence": ["PROOF_OF_DELIVERY_SIGNATURE", "ADDRESS_VERIFICATION"], "message": "Please send the delivery signature or address check."}
+    preview_resp = client.post("/api/disputes/DEMO-DSP-1042/actions/preview", json={"action_type": "REQUEST_SELLER_EVIDENCE", **ask})
     assert preview_resp.status_code == 200
     prev_data = preview_resp.json()
     assert prev_data["is_supported"] is True
     assert prev_data["requires_confirmation"] is True
 
-    # 7. Step 7: Investigator executes confirmed action
-    exec_resp = client.post(
-        "/api/disputes/DEMO-DSP-1042/actions/execute",
-        json={
-            "action_type": "PROVIDE_EVIDENCE",
-            "confirmed": True,
-            "notes": "Verified carrier postal depot scan matches postal sector.",
-            "carrier": "UPS",
-            "tracking_number": "1Z9999999999999999"
-        }
-    )
+    # 7. Step 7: Investigator sends the request
+    exec_resp = client.post("/api/disputes/DEMO-DSP-1042/actions/execute", json={"action_type": "REQUEST_SELLER_EVIDENCE", "confirmed": True, **ask})
     assert exec_resp.status_code == 200
     exec_data = exec_resp.json()
     assert exec_data["success"] is True
     assert exec_data["environment"] == "demo"
     audit_id = exec_data["audit_event_id"]
 
-    # 8. Step 8: Verify dispute status updated
+    # 8. Step 8: The case now waits on the seller
     updated_dsp = client.get("/api/disputes/DEMO-DSP-1042").json()
-    assert updated_dsp["status"] == "UNDER_REVIEW"
-    assert updated_dsp["evidence_status"] == "COMPLETE"
+    assert updated_dsp["status"] == "WAITING_FOR_SELLER_RESPONSE"
 
-    # 9. Step 9: Verify audit trail
-    audit_resp = client.get("/api/audit-events?dispute_id=DEMO-DSP-1042")
-    assert audit_resp.status_code == 200
-    events = audit_resp.json()
+    # 9. Step 9: The seller answers. The buyer hasn't been asked, so the case is in progress. The investigator can still decide with what is on file.
+    msg = client.get("/api/disputes/DEMO-DSP-1042/messages").json()[0]
+    assert client.post(f"/api/messages/{msg['id']}/simulate-reply").status_code == 200
+    assert client.get("/api/disputes/DEMO-DSP-1042").json()["status"] == "IN_PROGRESS"
+    from backend.tests.helpers import decide
+    decide(client, "DEMO-DSP-1042", "BUYER_FAVOR")
+    final = client.get("/api/disputes/DEMO-DSP-1042").json()
+    assert final["status"] == "RESOLVED" and final["outcome"] == "BUYER_FAVOR"
+
+    # 10. Step 10: Everything is in the audit trail
+    events = client.get("/api/audit-events?dispute_id=DEMO-DSP-1042").json()
     matching_event = next((e for e in events if e["id"] == audit_id), None)
     assert matching_event is not None
-    assert matching_event["action"] == "PROVIDE_EVIDENCE"
+    assert matching_event["action"] == "REQUEST_SELLER_EVIDENCE"
     assert matching_event["status"] == "SUCCESS"
+    actions = {e["action"] for e in events}
+    assert {"REPLY_RECEIVED", "DECIDE_FOR_BUYER"} <= actions

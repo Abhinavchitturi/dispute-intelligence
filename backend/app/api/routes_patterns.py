@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends
+from backend.app.services.auth_service import manager_user
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 
 from backend.app.database import get_db
 from backend.app.services.pattern_service import PatternService
 
-router = APIRouter(tags=["Pattern Insights"])
+router = APIRouter(tags=["Pattern Insights"], dependencies=[Depends(manager_user)])
 
 @router.get("/patterns", response_model=List[Dict[str, Any]])
 def get_patterns(db: Session = Depends(get_db)):

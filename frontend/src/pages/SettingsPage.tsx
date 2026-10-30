@@ -1,289 +1,132 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import {
-  Settings,
-  ShieldCheck,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  RotateCcw,
-  Key,
-  ExternalLink,
-  Cpu,
-  Database,
-  Info
-} from 'lucide-react';
-import {
-  fetchIntegrationStatus,
-  testPayPalConnectivity,
-  testAIConnectivity,
-  resetDemoData
-} from '../api/client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { CheckCircle2, Cpu, Database, Plug, RotateCcw, XCircle } from 'lucide-react';
+import { fetchIntegrationStatus, resetDemoData, testAIConnectivity, testPayPalConnectivity } from '../api/client';
+import { Badge, Button, Card, ErrorState, KeyValue, Modal, PageHeader, SectionTitle, Skeleton, useToast } from '../components/ui/kit';
+import { cn, titleCase } from '../lib/format';
+
+type TestResult = { connected: boolean; message: string } | null;
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="flex items-center justify-between gap-4 border-b border-line py-3 text-sm last:border-0"><span className="text-muted">{label}</span><span className="text-right text-slate-100">{children}</span></div>;
+}
+
+function Result({ r }: { r: TestResult }) {
+  if (!r) return null;
+  return (
+    <div className={cn('mt-4 flex items-start gap-2 rounded-xl border p-3 text-sm animate-fade-in', r.connected ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-200' : 'border-rose-400/20 bg-rose-400/5 text-rose-200')}>
+      {r.connected ? <CheckCircle2 className="mt-0.5 h-4 w-4" /> : <XCircle className="mt-0.5 h-4 w-4" />}
+      <div><p className="font-medium">{r.connected ? 'Connected' : 'Not connected'}</p><p className="opacity-80">{r.message}</p></div>
+    </div>
+  );
+}
 
 export function SettingsPage() {
-  const [testingPayPal, setTestingPayPal] = useState(false);
-  const [payPalTestResult, setPayPalTestResult] = useState<any | null>(null);
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [paypal, setPaypal] = useState<TestResult>(null);
+  const [ai, setAi] = useState<TestResult>(null);
+  const [busy, setBusy] = useState<'paypal' | 'ai' | 'reset' | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
-  const [testingAI, setTestingAI] = useState(false);
-  const [aiTestResult, setAiTestResult] = useState<any | null>(null);
+  const { data: status, isLoading, error, refetch } = useQuery({ queryKey: ['integrationStatus'], queryFn: fetchIntegrationStatus });
 
-  const [resetting, setResetting] = useState(false);
-  const [resetMessage, setResetMessage] = useState<string | null>(null);
-
-  const { data: status, isLoading, refetch } = useQuery({
-    queryKey: ['integrationStatus'],
-    queryFn: fetchIntegrationStatus,
-  });
-
-  const handleTestPayPal = async () => {
+  const run = async (kind: 'paypal' | 'ai') => {
+    setBusy(kind);
     try {
-      setTestingPayPal(true);
-      const res = await testPayPalConnectivity();
-      setPayPalTestResult(res);
+      const res = await (kind === 'paypal' ? testPayPalConnectivity() : testAIConnectivity());
+      (kind === 'paypal' ? setPaypal : setAi)(res);
     } catch (e: any) {
-      setPayPalTestResult({ connected: false, message: e.message });
-    } finally {
-      setTestingPayPal(false);
-    }
+      (kind === 'paypal' ? setPaypal : setAi)({ connected: false, message: e.message });
+    } finally { setBusy(null); }
   };
 
-  const handleTestAI = async () => {
+  const reset = async () => {
+    setBusy('reset');
     try {
-      setTestingAI(true);
-      const res = await testAIConnectivity();
-      setAiTestResult(res);
-    } catch (e: any) {
-      setAiTestResult({ connected: false, message: e.message });
-    } finally {
-      setTestingAI(false);
-    }
-  };
-
-  const handleResetData = async () => {
-    try {
-      setResetting(true);
       const res = await resetDemoData();
-      setResetMessage(res.message);
-      setTimeout(() => setResetMessage(null), 4000);
-      refetch();
-    } catch (e: any) {
-      alert('Failed to reset demo data.');
-    } finally {
-      setResetting(false);
-    }
+      toast('success', res.message || 'Demo data reset.');
+      setConfirmReset(false);
+      queryClient.invalidateQueries();
+    } catch { toast('error', 'Failed to reset demo data.'); }
+    finally { setBusy(null); }
   };
 
-  if (isLoading || !status) {
-    return (
-      <div className="py-16 text-center text-slate-400 text-xs">
-        <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-        Checking system integration configurations...
-      </div>
-    );
-  }
+  if (error) return <ErrorState message="Couldn't load integration status." onRetry={() => refetch()} />;
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-white tracking-tight">Settings &amp; Integration Connectivity</h1>
-        <p className="text-xs text-slate-400 mt-0.5">
-          Inspect sandbox credentials status, AI provider fallback readiness, and local database environments.
-        </p>
-      </div>
+    <>
+      <PageHeader title="Settings" subtitle="Settings & Integration Connectivity — check what's connected and reset the sample data." />
 
-      {/* Mode Status Card */}
-      <div className="p-5 rounded-xl bg-[#0F172A] border border-[#1E293B] shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <span className="text-xs text-slate-400 uppercase font-semibold">Active Application Mode:</span>
-            <span className="text-xs px-2.5 py-0.5 rounded font-mono font-bold uppercase bg-purple-950 text-purple-300 border border-purple-800">
-              {status.environment_mode.toUpperCase()} MODE
-            </span>
-          </div>
-          <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
-            In Demo mode, ResolveIQ uses deterministic synthetic records and rules-based brief generation.
-            Actions are safely simulated without modifying live payment balances.
-          </p>
-        </div>
-
-        <button
-          onClick={handleResetData}
-          disabled={resetting}
-          className="flex items-center space-x-1.5 px-3 py-2 bg-[#161F38] hover:bg-[#233054] text-slate-200 rounded-lg text-xs font-semibold border border-[#233054] transition disabled:opacity-50 self-start md:self-auto"
-        >
-          <RotateCcw className={`w-3.5 h-3.5 ${resetting ? 'animate-spin' : ''}`} />
-          <span>{resetting ? 'Resetting DB...' : resetMessage || 'Reset Demo Dataset'}</span>
-        </button>
-      </div>
-
-      {/* Integration Checks Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {/* PayPal Sandbox Box */}
-        <div className="p-5 rounded-xl bg-[#0F172A] border border-[#1E293B] space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-[#1E293B]">
-            <div className="flex items-center space-x-2">
-              <Key className="w-4 h-4 text-blue-400" />
-              <h2 className="text-sm font-bold text-white">PayPal Sandbox REST API</h2>
-            </div>
-            <span
-              className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
-                status.paypal.configured
-                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                  : 'bg-amber-950 text-amber-300 border border-amber-800'
-              }`}
-            >
-              {status.paypal.configured ? 'CONFIGURED' : 'UNCONFIGURED (DEMO FALLBACK)'}
-            </span>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            <div className="flex justify-between py-1 border-b border-[#161F38]">
-              <span className="text-slate-400">Environment Endpoint</span>
-              <span className="font-mono text-slate-200">{status.paypal.base_url}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[#161F38]">
-              <span className="text-slate-400">PAYPAL_CLIENT_ID</span>
-              <span className="font-mono text-slate-200">
-                {status.paypal.client_id_configured ? '•••••••• [Configured]' : 'Not Configured'}
-              </span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[#161F38]">
-              <span className="text-slate-400">PAYPAL_CLIENT_SECRET</span>
-              <span className="font-mono text-slate-200">
-                {status.paypal.client_secret_configured ? '•••••••• [Configured]' : 'Not Configured'}
-              </span>
-            </div>
-          </div>
-
-          <div className="pt-2">
-            <button
-              onClick={handleTestPayPal}
-              disabled={testingPayPal}
-              className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-blue-600/20 transition disabled:opacity-50"
-            >
-              {testingPayPal ? 'Executing Handshake...' : 'Test PayPal Sandbox Connection'}
-            </button>
-          </div>
-
-          {payPalTestResult && (
-            <div
-              className={`p-3 rounded-lg text-xs space-y-1 ${
-                payPalTestResult.connected
-                  ? 'bg-emerald-950/40 border border-emerald-800 text-emerald-300'
-                  : 'bg-rose-950/40 border border-rose-800 text-rose-300'
-              }`}
-            >
-              <div className="font-semibold flex items-center space-x-1.5">
-                {payPalTestResult.connected ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                ) : (
-                  <XCircle className="w-4 h-4 text-rose-400" />
-                )}
-                <span>{payPalTestResult.connected ? 'Handshake Succeeded' : 'Handshake Failed'}</span>
+      {isLoading || !status ? (
+        <div className="grid gap-6 lg:grid-cols-2"><Skeleton className="h-72 rounded-2xl" /><Skeleton className="h-72 rounded-2xl" /></div>
+      ) : (
+        <>
+          <Card className="flex flex-wrap items-center justify-between gap-4 p-5">
+            <div>
+              <div className="text-xs uppercase tracking-wider text-muted">Environment</div>
+              <div className="mt-1 flex items-center gap-3">
+                <Badge tone={status.environment_mode === 'demo' ? 'violet' : 'info'} dot>{status.environment_mode.toUpperCase()} MODE</Badge>
+                <span className="text-sm text-muted">{status.environment_mode === 'demo' ? 'Sample data. Nothing is sent to PayPal.' : 'Connected to the PayPal sandbox.'}</span>
               </div>
-              <p className="text-[11px]">{payPalTestResult.message}</p>
             </div>
-          )}
-        </div>
+            <Button onClick={() => setConfirmReset(true)}><RotateCcw className="h-4 w-4" />Reset demo data</Button>
+          </Card>
 
-        {/* AI Provider Box */}
-        <div className="p-5 rounded-xl bg-[#0F172A] border border-[#1E293B] space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-[#1E293B]">
-            <div className="flex items-center space-x-2">
-              <Cpu className="w-4 h-4 text-purple-400" />
-              <h2 className="text-sm font-bold text-white">AI Provider &amp; Fallback Engine</h2>
-            </div>
-            <span className="text-[10px] px-2 py-0.5 rounded font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800">
-              OPERATIONAL
-            </span>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            <div className="flex justify-between py-1 border-b border-[#161F38]">
-              <span className="text-slate-400">Configured Provider</span>
-              <span className="font-mono text-slate-200 uppercase">{status.ai_provider.provider}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[#161F38]">
-              <span className="text-slate-400">Deterministic Rule Engine</span>
-              <span className="font-semibold text-emerald-400">Always Active (Offline Ready)</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[#161F38]">
-              <span className="text-slate-400">Citation Validator</span>
-              <span className="font-semibold text-emerald-400">Enforced</span>
-            </div>
-          </div>
-
-          <div className="pt-2">
-            <button
-              onClick={handleTestAI}
-              disabled={testingAI}
-              className="w-full py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-purple-600/20 transition disabled:opacity-50"
-            >
-              {testingAI ? 'Verifying...' : 'Test Intelligence Engine'}
-            </button>
-          </div>
-
-          {aiTestResult && (
-            <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800 text-xs text-emerald-300 space-y-1">
-              <div className="font-semibold flex items-center space-x-1.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span>{aiTestResult.service}</span>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card className="p-6">
+              <SectionTitle title="PayPal Sandbox REST API" action={<Badge tone={status.paypal.configured ? 'success' : 'warn'} dot>{status.paypal.configured ? 'Configured' : 'Not configured'}</Badge>} />
+              <div>
+                <Row label="Environment">{titleCase(status.paypal.environment)}</Row>
+                <Row label="Endpoint"><span className="font-mono text-xs">{status.paypal.base_url}</span></Row>
+                <Row label="Client ID">{status.paypal.client_id_configured ? <Badge tone="success">Set</Badge> : <Badge>Not set</Badge>}</Row>
+                <Row label="Client secret">{status.paypal.client_secret_configured ? <Badge tone="success">Set</Badge> : <Badge>Not set</Badge>}</Row>
               </div>
-              <p className="text-[11px] text-emerald-200">{aiTestResult.message}</p>
-            </div>
-          )}
-        </div>
-      </div>
+              <Button className="mt-5 w-full" variant="primary" loading={busy === 'paypal'} onClick={() => run('paypal')}><Plug className="h-4 w-4" />Test connection</Button>
+              <Result r={paypal} />
+            </Card>
 
-      {/* Feature Availability Matrix */}
-      <div className="p-5 rounded-xl bg-[#0F172A] border border-[#1E293B]">
-        <h2 className="text-sm font-bold text-white mb-3">Feature Capability Matrix</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
-          {Object.entries(status.features_available).map(([k, v]) => (
-            <div key={k} className="p-3 rounded-lg bg-[#161F38] border border-[#233054] flex items-center justify-between">
-              <span className="text-slate-300 capitalize">{k.replace(/_/g, ' ')}</span>
-              {v ? (
-                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800">
-                  READY
-                </span>
-              ) : (
-                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold bg-slate-800 text-slate-400 border border-slate-700">
-                  OPTIONAL
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+            <Card className="p-6">
+              <SectionTitle title="AI summaries" action={<Badge tone="success" dot>Operational</Badge>} />
+              <div>
+                <Row label="Provider"><span className="uppercase">{status.ai_provider.provider}</span></Row>
+                <Row label="Model"><span className="font-mono text-xs">{status.ai_provider.model}</span></Row>
+                <Row label="Deterministic Rule Engine"><span className="text-emerald-300">Always on (works offline)</span></Row>
+                <Row label="Citation checking"><span className="text-emerald-300">Enforced</span></Row>
+              </div>
+              <Button className="mt-5 w-full" variant="primary" loading={busy === 'ai'} onClick={() => run('ai')}><Cpu className="h-4 w-4" />Test AI provider</Button>
+              <Result r={ai} />
+            </Card>
+          </div>
 
-      {/* Setup Instructions / Environment Documentation */}
-      <div className="p-5 rounded-xl bg-[#0F172A] border border-[#1E293B] space-y-3">
-        <h2 className="text-sm font-bold text-white flex items-center space-x-2">
-          <Info className="w-4 h-4 text-blue-400" />
-          <span>Configuring Live PayPal Sandbox Credentials</span>
-        </h2>
-        <p className="text-xs text-slate-300 leading-relaxed">
-          To switch from Demo mode to PayPal Sandbox mode, create a PayPal Developer Sandbox App at{' '}
-          <a
-            href="https://developer.paypal.com/dashboard/applications/sandbox"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-400 underline inline-flex items-center"
-          >
-            developer.paypal.com <ExternalLink className="w-3 h-3 ml-1" />
-          </a>{' '}
-          and add your keys to the backend <code className="text-slate-200 font-mono">.env</code> file:
-        </p>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card className="p-6">
+              <SectionTitle title="Database" />
+              <dl className="grid grid-cols-2 gap-4">
+                <KeyValue label="Type"><span className="flex items-center gap-2"><Database className="h-4 w-4 text-brand-soft" />{status.database.type}</span></KeyValue>
+                <KeyValue label="Location" mono>{status.database.url_sanitized}</KeyValue>
+              </dl>
+            </Card>
+            <Card className="p-6">
+              <SectionTitle title="Features" />
+              <ul className="flex flex-wrap gap-2">
+                {Object.entries(status.features_available).map(([k, on]) => (
+                  <Badge key={k} tone={on ? 'success' : 'neutral'}>{on ? '✓' : '–'} {titleCase(k)}</Badge>
+                ))}
+              </ul>
+            </Card>
+          </div>
+        </>
+      )}
 
-        <div className="p-3 rounded-lg bg-[#070D1E] border border-[#233054] text-[11px] font-mono text-slate-300 overflow-x-auto">
-          <div>RESOLVEIQ_MODE=sandbox</div>
-          <div>PAYPAL_CLIENT_ID=your_sandbox_client_id</div>
-          <div>PAYPAL_CLIENT_SECRET=your_sandbox_client_secret</div>
-          <div>AI_PROVIDER=gemini # optional</div>
-          <div>AI_API_KEY=your_gemini_api_key # optional</div>
-        </div>
-      </div>
-    </div>
+      <Modal
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        title="Reset demo data?"
+        footer={<><Button onClick={() => setConfirmReset(false)}>Cancel</Button><Button variant="danger" loading={busy === 'reset'} onClick={reset}>Reset data</Button></>}
+      >
+        <p className="text-sm text-slate-300">This restores the original sample disputes and clears any actions you've taken in the demo.</p>
+      </Modal>
+    </>
   );
 }

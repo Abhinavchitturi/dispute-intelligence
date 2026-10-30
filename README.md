@@ -10,7 +10,7 @@ An AI investigation workbench for a PayPal dispute operations team. It is a prot
 2. **Investigation brief:** for each dispute the AI writes a summary, timeline, evidence checklist and a list of missing evidence.
 3. **No invented evidence:** every claim in a brief cites a source record (dispute, order, transaction, tracking event, message). The backend checks every citation. A claim with no valid source is marked "unverified" or removed.
 4. **Similar cases and patterns:** shows similar past cases and how they were resolved, and flags cross-seller patterns, such as one buyer filing against many sellers.
-5. **Human decides:** the AI recommends. The investigator picks the action and the app runs it through the PayPal API.
+5. **Human decides:** the AI recommends. The PayPal investigator asks the seller and the buyer for evidence, and makes the final call. The app never decides on its own.
 6. **Audit log:** every action is recorded.
 
 MVP dispute reasons: *item not received* and *not as described*.
@@ -100,9 +100,35 @@ MIT is the intended license. The `LICENSE` file has not been added yet, and the 
 
 > **"Every claim. Every source. One clearer investigation."**
 
-ResolveIQ is an enterprise-grade AI-assisted dispute investigation workbench engineered to help payment risk analysts, operations investigators, and merchant dispute teams resolve payment disputes faster, with verifiable evidentiary integrity.
+ResolveIQ is an AI-assisted dispute investigation workbench for **PayPal's own dispute team**. When a buyer files a complaint, PayPal asks both the buyer and the seller for evidence, weighs it, and makes the call. ResolveIQ helps the investigator do that faster, with every claim traced to a source record.
 
 Instead of navigating fragmented carrier tracking portals, billing ledgers, customer correspondence threads, and PayPal interfaces, ResolveIQ aggregates available transaction facts into a unified workbench, computes explainable 0–100 risk priority scores, generates structured evidence-linked AI briefs, detects systemic anomaly patterns, and enables human-supervised action dispatching to the PayPal Sandbox REST API.
+
+---
+
+## How a dispute moves (PayPal's side)
+
+**Who uses it:** a PayPal dispute investigator. The two other parties are the **buyer**, who filed the complaint, and the **seller**, who is being disputed. PayPal talks to each of them and decides.
+
+| Status | Meaning | Whose move |
+|---|---|---|
+| **New** (`OPEN`) | Filed. Nobody has been asked for anything. | PayPal |
+| **Waiting on seller / buyer / both** | PayPal has asked for evidence and a party owes a reply. | The seller and/or buyer |
+| **Ready to decide** (`UNDER_REVIEW`) | Every request is answered. | PayPal |
+| **Resolved** / **Closed** | PayPal decided. The outcome is *buyer's favor* or *seller's favor*. | Nobody |
+
+**What the investigator can do** (the *Take action* popup, three steps: choose, message, review):
+
+1. **Ask the seller for evidence**, such as a delivery signature, address verification or tracking. A checklist suggests what the case is missing.
+2. **Ask the buyer for evidence**, such as camera footage, a statement, or photos of the item.
+3. **Decide in the buyer's favor**: the buyer is refunded, taken from the seller.
+4. **Decide in the seller's favor**: no refund.
+
+Every message is drafted from the case's own records (each fact tagged with its record ID), is editable, and is shown in full before anything is sent. A decision sends one notice to both parties and is final. The **Messages** workspace shows each case's conversation, who PayPal is waiting on, and which cases have all their evidence in.
+
+**Evidence files:** a buyer's camera footage (or any file) is stored by PayPal's dispute system, not by this app. ResolveIQ keeps a *reference* to it (file name, type, size, who supplied it). The app can't view or analyse footage, and the draft decision notice says so.
+
+**Demo vs sandbox:** in demo mode the seller and buyer are simulated. After a short wait (`DEMO_REPLY_DELAY_SECONDS`, default 20) a reply arrives, supplies what that side plausibly could, and moves the case along. A seller can only produce a delivery signature if the carrier confirmed the address. Simulated replies are always badged. In sandbox mode nothing is faked: messages are recorded locally, and replies from real parties are **not yet synced** into the app.
 
 ---
 
@@ -110,12 +136,12 @@ Instead of navigating fragmented carrier tracking portals, billing ledgers, cust
 
 - **Evidence Fragmentation:** Investigators lose 15–30 minutes per dispute reconciling detached data points across carrier scans, order systems, customer messages, and payment records.
 - **Hallucination & Bias Risk:** Generic generative AI solutions invent timestamps, make unfounded assumptions about buyer/seller integrity, and hallucinate delivery confirmations without audit trails.
-- **Default Settlement Penalties:** Inflexible response deadlines mean merchants default and lose disputes simply because missing documentation was not surfaced in time.
+- **Missed Decision Targets:** Cases age past PayPal's resolution target because nobody noticed which ones were waiting on a reply, which had all their evidence, and which were urgent.
 - **Black-box Decisioning:** Opaque automated decision engines create regulatory exposure and lack explainable reasoning for human analysts.
 
 ### How ResolveIQ Solves This
 - **Evidence-Linked AI Briefs:** Every factual finding in an AI brief cites exact source record IDs (`DEMO-DSP-1042`, `DEMO-SHIP-1042`, etc.). Clicking any citation immediately scrolls and highlights the source evidence record.
-- **Strict Human-in-the-Loop Safeguards:** AI acts solely as an analytical assistant, never an autonomous judge. Consequential actions require explicit two-step investigator confirmation before sending API requests.
+- **Strict Human-in-the-Loop Safeguards:** AI acts solely as an analytical assistant, never an autonomous judge. Every request and every decision needs explicit investigator confirmation, and a decision also needs a tick confirming both sides' evidence was reviewed.
 - **Explainable Priority Scoring:** A deterministic 0–100 scoring model breaks down deadline urgency, evidence gaps, contradictory records, and financial exposure with human-readable factor contributions.
 - **Dual Operational Modes:** Works completely out of the box in **Demo Mode** using a deterministic synthetic dataset and an offline rules-based intelligence fallback, while supporting live **PayPal Sandbox Mode** for real OAuth 2.0 dispute orchestration.
 
@@ -131,7 +157,7 @@ flowchart TD
         Queue[Prioritized Dispute Queue]
         Investigate[Investigation Workbench]
         BriefView[AI Brief & Citation Linker]
-        ActionPanel[Investigator Action Panel & 2-Step Confirmation]
+        ActionPanel[Take-action popup: ask seller, ask buyer, decide]
         SimilarView[Historical Precedent Explorer]
         PatternView[Authorized Pattern Insights]
         AuditView[Compliance Audit Trail]
@@ -215,7 +241,7 @@ cp .env.example .env
 # Install backend requirements
 python -m pip install -r backend/requirements.txt
 
-# Populate initial synthetic dataset (12 disputes, 20 historical precedents)
+# Populate initial synthetic dataset (27 disputes, 20 historical precedents)
 python -m backend.app.seed.seed_data
 ```
 
@@ -332,8 +358,8 @@ npm test
 ## 9. Demo Walkthrough: Investigating Main Demo Case `DEMO-DSP-1042`
 
 1. **Open Overview Dashboard:**
-   - Notice the aggregate metrics (12 open cases, approaching deadlines, evidence gaps, volume chart).
-   - Click the top banner button: **Open Main Demo Case (Alex Morgan #1042)**.
+   - Four tiles show where cases stand: open, decide within 48 hours, waiting on replies, ready to decide. "Needs attention now" lists the most urgent.
+   - Click **Open demo case** (or pick `DEMO-DSP-1042` from the list). It starts as **New**: nobody has been asked for anything.
 2. **Review Case Header & Transaction Context:**
    - Case ID: `DEMO-DSP-1042`
    - Disputed Amount: `USD 450.00`
@@ -348,13 +374,19 @@ npm test
    - The brief flags `PROOF_OF_DELIVERY_SIGNATURE` and `ADDRESS_VERIFICATION` as missing documents.
 5. **Inspect Similar Historical Precedents:**
    - Click the **Similar Cases** tab to view matching historical cases (e.g., `HIST-CASE-203` with 80% match, where tracking was delivered but address verification was unknown).
-6. **Execute Investigator Action:**
-   - In the right-hand **Investigator Action Panel**, select *Provide Rebuttal Evidence*.
-   - Click **Review & Confirm Action**: A modal opens displaying pre-flight impact, affected environment (`demo`), and required human authorization.
-   - Click **Confirm & Execute Action**.
-   - The dispute transitions to `UNDER_REVIEW`, an evidence record is logged, and an immutable audit event is persisted.
-7. **Verify Compliance Audit Trail:**
-   - Navigate to the **Audit Trail** page to observe the full audit log with timestamp, actor (`investigator_user`), sanitized parameters, and success outcome.
+6. **Ask the seller for evidence:**
+   - Click **Take action**, keep *Ask the seller for evidence*, then **Next: write message**.
+   - The checklist already ticks what the case lacks (delivery signature, address verification, merchant correspondence). Review the drafted message, then **Next: review** and **Send request**.
+   - The case becomes **Waiting on seller** and you land on the conversation. The seller replies after a few seconds. Because the carrier never confirmed the address, they can send tracking and correspondence but **not** a signature or address check, and their reply says so.
+7. **Ask the buyer for evidence:**
+   - **Take action**, *Ask the buyer for evidence*. The list is the buyer's own: camera footage, delivery address confirmation, a statement.
+   - The buyer replies with their footage as a file *reference* and the case becomes **Ready to decide**. The Evidence tab shows who provided each document.
+8. **Decide:**
+   - **Take action**, *Decide in the buyer's favor* (or the seller's). The draft notice lists what was reviewed (tagged *Provided by seller* / *Provided by buyer* / *Not provided*), the reasons, and what happens next. Warnings appear if the decision conflicts with the records.
+   - Deciding is two steps: choose, then decide. Tick *I've reviewed the evidence on file*, then **Confirm decision**. Both parties are notified, the case is **Resolved**, and no further action is offered.
+   - **You don't have to ask both sides first.** One concrete document on file is enough to decide on, so for a quick demo you can open a case, click **Take action**, pick a decision and confirm. Clicking a dispute in the list opens it in **Investigation**, and the sidebar's Investigation link returns to the case you last opened.
+9. **Verify Compliance Audit Trail:**
+   - Open the **Activity log** to see every request, reply and decision with timestamp, actor (`investigator_user`), and outcome.
 
 ---
 
@@ -362,7 +394,7 @@ npm test
 
 - **No Secret Leakage:** Client secrets, bearer tokens, and API keys are stored exclusively in backend server environments and are systematically redacted from audit logs (`[REDACTED]`).
 - **Prompt Injection Defense:** Customer messages and dispute remarks are strictly bounded within structured JSON contexts; system prompt instructions forbid treating user messages as AI operational instructions.
-- **Human Approval Mandatory:** No automated closing, refunding, or evidence rebuttal can execute without active human confirmation.
+- **Human Approval Mandatory:** No request, refund, or decision can execute without active human confirmation.
 - **Safe Development Environment:** Local SQLite fallback with check_same_thread safe pooling, parameterized queries via SQLAlchemy ORM, and comprehensive CORS whitelisting.
 
 ---
@@ -378,3 +410,37 @@ Payment dispute investigation is one of the highest-friction bottlenecks in mode
 4. Keeps the human analyst firmly in control with one-click sandbox action orchestration.
 
 *"Every claim. Every source. One clearer investigation."*
+
+---
+
+## Sign-in
+
+Everything sits behind a login. The demo accounts and their passwords are listed in [credentials.md](credentials.md). The accounts are created automatically the first time the backend starts.
+
+## How PayPal staff reach sellers and buyers
+
+Sellers and buyers don't use this app. It is for PayPal's own team. So everything that has to reach them goes out **by email**, and everything they send back comes in **by email**:
+
+- **Evidence requests** are emailed to the seller or buyer with the case number in the subject (for example `[DEMO-DSP-1042]`), what is needed, and how to reply.
+- **Their replies** go to the disputes mailbox. The mail provider forwards each one to `POST /api/inbound-mail` (header `X-Inbound-Secret`), and it lands on the case as an unread **Email reply**, with the names of its attachments.
+- **Someone at PayPal goes through it:** open the reply, tick which of the requested documents really came, and save. Only then does the evidence count and the case move on. Anything unticked is recorded as not sent.
+- **Decisions** are emailed to both sides, listing the proof by name, with the appeals address. A reply to a decided case opens an appeal.
+- **Mail server:** set `SMTP_HOST` (and the login) in `.env` to send for real. Without it, every email is kept and shown under the case's **Emails** tab as "Kept here, not sent", so nothing is lost.
+- **Demo:** each chat has **Simulate email reply**, which sends a reply through the same path.
+- **Alerts for the team** (strikes, requests, the AI Agent taking a case) stay inside the app, in the pinned banner and the bell.
+
+## Who does what
+
+1. **Investigator** works the cases the manager gives them, and can **share** a case with colleagues so several investigators work it together (the owner stays the owner; anyone on it can work it; the owner, the manager or the person themselves can take someone off), and decides with a reason. With no cases left, they can ask the manager for more, and the manager is alerted. The decision goes to the AI reviewer.
+2. **AI reviewer** (built separately, see [docs/ai-agent-contract.md](docs/ai-agent-contract.md)) approves or overturns. An overturn is a strike for the investigator.
+3. **Manager** (PayPal):
+   - takes the **high-profile cases** (any case for USD 1,000 or more; the threshold is the `HIGH_PROFILE_AMOUNT` setting. It goes by price only, since a priority score keeps changing) and decides them directly, with no AI review;
+   - **hands out cases**: assign one case from its row, or use **Distribute cases**: press plus or minus next to each person for how many cases they get, or press **Split evenly** to share them out (30 cases between three people is 10 each). The most urgent go out first. Investigators don't pick their own cases;
+   - sees **unassigned cases first**: every case has a 5-day window (`CASE_WINDOW_DAYS`) and its priority score climbs as the days run out, so the most urgent unowned cases lead the Overview. A case nobody takes by its deadline goes to the **AI Agent**, which handles the whole case, and the manager gets a pinned alert;
+   - is the **only one who sees every case**; investigators see just the cases they own, plus any a colleague has shared with them (anything else answers "not found", on every screen and API route);
+   - can view **every case** (Disputes page, or the search bar at the top) and step in on any of them;
+   - overturns anyone, including the AI. Corrections to the AI are saved as training feedback;
+   - gets an alert every 3 strikes, pinned on top and pinged hourly until marked **Sorted**; accounts are blocked at 10 strikes until the manager unblocks them;
+   - **manages all users** on the Team page: add people, rename them, change roles, reset passwords, block or deactivate.
+
+An unhappy buyer or seller can email the appeals address, which opens a new case for a different investigator with the manager joined.

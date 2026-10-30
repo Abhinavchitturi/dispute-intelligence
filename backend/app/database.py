@@ -21,3 +21,17 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_columns() -> None:
+    """Adds columns that models gained after a table was first created. create_all() never alters existing tables."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    for table in Base.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        existing = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name not in existing and col.nullable:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {table.name} ADD COLUMN {col.name} {col.type.compile(engine.dialect)}"))

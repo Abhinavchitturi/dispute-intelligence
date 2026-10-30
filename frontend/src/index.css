@@ -3,29 +3,52 @@
 @tailwind utilities;
 
 @layer base {
+  html { color-scheme: dark; }
   body {
-    background-color: #070D1E;
-    color: #E2E8F0;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: #000000;
+    color: #F5F5F7;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, "Helvetica Neue", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    letter-spacing: -0.003em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
-  
-  code, pre {
-    font-family: 'JetBrains Mono', monospace;
+  code, pre { font-family: "SF Mono", ui-monospace, Menlo, monospace; }
+  /* A clear, high-contrast focus ring for keyboard users, as on Apple platforms. */
+  :focus-visible { outline: 3px solid rgba(10, 132, 255, .65); outline-offset: 2px; border-radius: 8px; }
+  ::selection { background: rgba(10, 132, 255, .4); }
+}
+
+@layer components {
+  /* Touch screens need at least a 44 x 44 point target. */
+  @media (pointer: coarse) {
+    button, select, input[type='text'], input[type='search'], textarea, [role='tab'] { min-height: 44px; }
+    input[type='checkbox'] { width: 22px; height: 22px; }
   }
 }
 
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+@layer utilities {
+  .skeleton { position: relative; overflow: hidden; background: #2C2C2E; border-radius: 10px; }
+  .skeleton::after {
+    content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.05), transparent);
+    animation: shimmer 1.4s infinite;
+  }
+  .tabular { font-variant-numeric: tabular-nums; }
 }
-::-webkit-scrollbar-track {
-  background: #0B132B;
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #48484A; border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #636366; background-clip: padding-box; }
+
+@media (prefers-contrast: more) {
+  :root { --separator: #636366; }
+  .border-line, .border-line-strong { border-color: #636366 !important; }
 }
-::-webkit-scrollbar-thumb {
-  background: #233054;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #3A86FF;
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

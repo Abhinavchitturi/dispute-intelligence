@@ -1,3 +1,4 @@
+import uuid
 from typing import List, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -27,7 +28,7 @@ class AuditService:
             if secret_prefix in sanitized_summary:
                 sanitized_summary = sanitized_summary.split(secret_prefix)[0] + f"{secret_prefix}[REDACTED]"
 
-        event_id = f"AUDIT-{int(datetime.utcnow().timestamp()*1000)}"
+        event_id = f"AUDIT-{int(datetime.utcnow().timestamp()*1000)}-{uuid.uuid4().hex[:6]}"  # two events in the same millisecond must not collide
         event = AuditEvent(
             id=event_id,
             dispute_id=dispute_id,
@@ -53,9 +54,12 @@ class AuditService:
         action: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 50,
-        offset: int = 0
+        offset: int = 0,
+        only_cases=None,
     ) -> List[AuditEventSchema]:
         query = db.query(AuditEvent)
+        if only_cases is not None:  # someone who may only see some cases sees only the activity on those
+            query = query.filter(AuditEvent.dispute_id.in_(only_cases))
         if dispute_id:
             query = query.filter(AuditEvent.dispute_id == dispute_id)
         if action and action != "ALL":

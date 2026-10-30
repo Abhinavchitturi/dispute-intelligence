@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { PriorityBadge, StatusBadge, EvidenceBadge, SourceBadge } from '../components/ui/StatusBadges';
+import { PriorityBadge, StatusBadge, EvidenceBadge, SourceBadge, OutcomeBadge } from '../components/ui/StatusBadges';
 
 describe('Fintech Status Badges', () => {
   it('renders critical priority badge for score >= 70', () => {
@@ -20,11 +20,26 @@ describe('Fintech Status Badges', () => {
   });
 
   it('renders status badges with human-readable labels', () => {
-    render(<StatusBadge status="WAITING_FOR_SELLER_RESPONSE" />);
-    expect(screen.getByText(/Action Needed: Seller/i)).toBeInTheDocument();
+    // Statuses are PayPal's view of a case: who we're waiting on, or whose move it is.
+    const labels: Record<string, string> = {
+      OPEN: 'New', WAITING_FOR_SELLER_RESPONSE: 'Waiting on seller', WAITING_FOR_BUYER_RESPONSE: 'Waiting on buyer',
+      WAITING_FOR_BOTH_RESPONSES: 'Waiting on both', UNDER_REVIEW: 'Ready to decide', RESOLVED: 'Resolved', CLOSED: 'Closed',
+    };
+    for (const [status, label] of Object.entries(labels)) {
+      const { unmount } = render(<StatusBadge status={status} />);
+      expect(screen.getByText(label)).toBeInTheDocument();
+      unmount();
+    }
+  });
 
-    render(<StatusBadge status="RESOLVED" />);
-    expect(screen.getByText(/RESOLVED/i)).toBeInTheDocument();
+  it('renders the outcome of a decided case, and nothing for an open one', () => {
+    const { unmount } = render(<OutcomeBadge outcome="BUYER_FAVOR" />);
+    expect(screen.getByText("Decided: buyer's favor")).toBeInTheDocument();
+    unmount();
+    render(<OutcomeBadge outcome="SELLER_FAVOR" />);
+    expect(screen.getByText("Decided: seller's favor")).toBeInTheDocument();
+    const empty = render(<OutcomeBadge outcome={null} />);
+    expect(empty.container).toBeEmptyDOMElement();
   });
 
   it('renders evidence completeness states correctly', () => {

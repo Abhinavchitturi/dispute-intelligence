@@ -20,7 +20,14 @@ class DashboardSummaryResponse(BaseModel):
     total_open_disputes: int
     approaching_deadline_count: int
     missing_evidence_count: int
-    awaiting_review_count: int
+    awaiting_review_count: int      # evidence is in: ready for PayPal to decide
+    new_cases_count: int = 0        # nobody has been asked for anything yet
+    waiting_on_parties_count: int = 0  # waiting on the seller and/or buyer to reply
+    ai_owned_count: int = 0            # open cases the AI Agent took because nobody did
+    unassigned_count: int = 0          # open cases nobody owns yet
+    high_profile_count: int = 0        # open high-profile cases, which the manager takes on
+    my_cases_count: int = 0            # open cases assigned to the person asking
+    pending_admin_review_count: int = 0  # decisions waiting for an admin
     disputes_by_reason: List[Dict[str, Any]]
     priority_distribution: Dict[str, int]
     recent_activity: List[Dict[str, Any]]

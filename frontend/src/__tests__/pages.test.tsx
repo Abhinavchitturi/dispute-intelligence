@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter, MemoryRouter } from 'react-router-dom';
+import { BrowserRouter, MemoryRouter, useLocation } from 'react-router-dom';
 
 import { OverviewPage } from '../pages/OverviewPage';
 import { DisputeQueuePage } from '../pages/DisputeQueuePage';
@@ -11,6 +11,27 @@ import { SimilarCasesPage } from '../pages/SimilarCasesPage';
 import { PatternInsightsPage } from '../pages/PatternInsightsPage';
 import { AuditTrailPage } from '../pages/AuditTrailPage';
 import { SettingsPage } from '../pages/SettingsPage';
+
+const disputeFixture = {
+  id: 'DEMO-DSP-1042',
+  external_dispute_id: 'PP-1042',
+  source: 'synthetic',
+  transaction_id: 'DEMO-TXN-1042',
+  buyer_reference: 'Alex Morgan',
+  merchant_reference: 'TechStore',
+  reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
+  status: 'WAITING_FOR_SELLER_RESPONSE',
+  amount: 450.0,
+  currency: 'USD',
+  priority_score: 72.0,
+  priority_factors: [
+    { name: 'Urgency', weight: 35.0, contribution: 20.0, explanation: 'Due in 48h' }
+  ],
+  evidence_status: 'CONFLICTING',
+  buyer_claim: 'The item never arrived'
+};
+
+function LocationProbe() { const l = useLocation(); return <div data-testid="loc">{l.pathname + l.search}</div>; }
 
 // Helper wrapper
 function renderWithProviders(ui: React.ReactElement, initialRoute = '/') {
@@ -23,6 +44,7 @@ function renderWithProviders(ui: React.ReactElement, initialRoute = '/') {
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialRoute]}>
         {ui}
+        <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -45,6 +67,10 @@ describe('ResolveIQ Page Components Suite', () => {
             approaching_deadline_count: 3,
             missing_evidence_count: 4,
             awaiting_review_count: 5,
+            new_cases_count: 2,
+            waiting_on_parties_count: 3,
+            my_cases_count: 4,
+            pending_admin_review_count: 2,
             disputes_by_reason: [
               { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', count: 6 },
               { reason: 'MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED', count: 3 }
@@ -72,37 +98,43 @@ describe('ResolveIQ Page Components Suite', () => {
 
     // Check loading indicator or text
     await waitFor(() => {
-      expect(screen.getByText(/Executive Dispute Overview/i)).toBeInTheDocument();
-      expect(screen.getByText('12')).toBeInTheDocument(); // total open disputes
-      expect(screen.getByText('3')).toBeInTheDocument(); // deadlines < 48h
-      expect(screen.getByText('4')).toBeInTheDocument(); // missing evidence
+      expect(screen.getByText(/Dispute Overview/i)).toBeInTheDocument();
+      expect(screen.getAllByText('3').length).toBeGreaterThan(0); // deadlines < 48h
     });
+
+    // The tiles show only what needs action: yours, due soon, waiting on a party, ready to decide. There is no "open disputes" total.
+    for (const [label, count, hint] of [
+      ['Your cases', '4', 'Open cases you are working'],
+      ['Decide within 48 hours', '3', 'Target date is close or passed'],
+      ['Waiting on replies', '3', 'Seller or buyer owes us evidence'],
+      ['Ready to decide', '5', 'Both sides have answered, or time is up. Decide now'],
+    ]) {
+      const tile = screen.getByText(label).closest('button') as HTMLElement;
+      expect(tile).toHaveTextContent(count);
+      expect(tile).toHaveTextContent(hint);
+    }
+    expect(screen.queryByText(/Waiting on seller/i)).not.toBeInTheDocument(); // the old seller-side tile
+    expect(screen.queryByText('Open disputes')).not.toBeInTheDocument();      // a total of everything open isn't something anyone acts on
+
+    // Each tile opens the matching list. "Your cases" is the investigator's own.
+    fireEvent.click(screen.getByText('Your cases').closest('button') as HTMLElement);
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/queue?view=mine'));
   });
 
   it('renders Dispute Queue with search, sorting and cases', async () => {
     global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/disputes/DEMO-DSP-1042')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ...disputeFixture, transaction: null, order: null, latest_brief_id: null,
+            evidence_items: [{ id: 'EV-1', dispute_id: 'DEMO-DSP-1042', evidence_type: 'CARRIER_TRACKING', description: 'UPS tracking', availability_status: 'AVAILABLE' }] })
+        });
+      }
       if (url.includes('/api/disputes')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([
-            {
-              id: 'DEMO-DSP-1042',
-              external_dispute_id: 'PP-1042',
-              source: 'synthetic',
-              transaction_id: 'DEMO-TXN-1042',
-              buyer_reference: 'Alex Morgan',
-              merchant_reference: 'TechStore',
-              reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
-              status: 'WAITING_FOR_SELLER_RESPONSE',
-              amount: 450.0,
-              currency: 'USD',
-              priority_score: 72.0,
-              priority_factors: [
-                { name: 'Urgency', weight: 35.0, contribution: 20.0, explanation: 'Due in 48h' }
-              ],
-              evidence_status: 'CONFLICTING',
-              buyer_claim: 'The item never arrived'
-            }
+            disputeFixture
           ])
         });
       }
@@ -112,18 +144,44 @@ describe('ResolveIQ Page Components Suite', () => {
     renderWithProviders(<DisputeQueuePage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Dispute Investigation Queue/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Your cases' })).toBeInTheDocument();   // an investigator's list is their own cases
       expect(screen.getByText('DEMO-DSP-1042')).toBeInTheDocument();
       expect(screen.getByText(/Alex Morgan/i)).toBeInTheDocument();
       expect(screen.getByText('USD 450.00')).toBeInTheDocument();
     });
 
-    // Inspect priority score factor modal
-    const infoBtn = screen.getByTitle(/Inspect priority score factors/i);
-    fireEvent.click(infoBtn);
+    // The eye is a quick peek: it opens the preview drawer with the priority factors, without leaving the list.
+    fireEvent.click(screen.getByRole('button', { name: /Quick view DEMO-DSP-1042/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Why this priority/i)).toBeInTheDocument();
+      expect(screen.getByText(/Due in 48h/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Open full case/i })).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('loc')).toHaveTextContent(/^\/\?open=DEMO-DSP-1042$/); // still on the list
+  });
 
-    expect(screen.getByText(/Priority Score Breakdown/i)).toBeInTheDocument();
-    expect(screen.getByText(/Due in 48h/i)).toBeInTheDocument();
+  it('clicking a dispute opens it in Investigation', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([disputeFixture, { ...disputeFixture, id: 'DEMO-DSP-2000', priority_score: 20 }]) });
+    renderWithProviders(<DisputeQueuePage />);
+    fireEvent.click(await screen.findByText('DEMO-DSP-2000')); // not the first row, and not the "top" case
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/investigate/DEMO-DSP-2000'));
+  });
+
+  it('filters the queue with quick views and shows live counts', async () => {
+    global.fetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve([
+        disputeFixture,
+        { ...disputeFixture, id: 'DEMO-DSP-2000', priority_score: 20, evidence_status: 'COMPLETE', status: 'UNDER_REVIEW' },
+      ]) }));
+
+    renderWithProviders(<DisputeQueuePage />);
+    await waitFor(() => expect(screen.getByText('DEMO-DSP-2000')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('tab', { name: /Urgent/i }));
+    await waitFor(() => {
+      expect(screen.getByText('DEMO-DSP-1042')).toBeInTheDocument();
+      expect(screen.queryByText('DEMO-DSP-2000')).not.toBeInTheDocument();
+    });
   });
 
   it('renders Similar Cases Precedent Explorer', async () => {
@@ -154,7 +212,7 @@ describe('ResolveIQ Page Components Suite', () => {
       expect(screen.getByText(/Historical Precedent Explorer/i)).toBeInTheDocument();
       expect(screen.getByText('HIST-CASE-203')).toBeInTheDocument();
       expect(screen.getByText(/INR claim where tracking showed delivered/i)).toBeInTheDocument();
-      expect(screen.getByText('SETTLED')).toBeInTheDocument();
+      expect(screen.getAllByText('Settled').length).toBeGreaterThan(1); // filter option + outcome badge
     });
   });
 
@@ -228,7 +286,7 @@ describe('ResolveIQ Page Components Suite', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Settings & Integration Connectivity/i)).toBeInTheDocument();
-      expect(screen.getByText(/DEMO MODE/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/DEMO MODE/i).length).toBeGreaterThan(0);
       expect(screen.getByText(/PayPal Sandbox REST API/i)).toBeInTheDocument();
       expect(screen.getByText(/Deterministic Rule Engine/i)).toBeInTheDocument();
     });
