@@ -40,7 +40,7 @@ describe('Signing in as someone else', () => {
     server();
     signInAs('MANAGER');
     render(<App />);
-    expect(await screen.findByText('Good morning, PayPal', { exact: false }).catch(() => screen.findByText(/PayPal/))).toBeInTheDocument();
+    expect((await screen.findAllByText(/PayPal/)).length).toBeGreaterThan(0);
     expect(await screen.findAllByText('PayPal')).not.toHaveLength(0);          // the manager's name, in the header
 
     // Sign out, then sign in as Abhinav through the real form, without reloading the page.
@@ -63,13 +63,13 @@ describe('Signing in as someone else', () => {
     server();
     signInAs('MANAGER');
     render(<App />);
-    expect(await screen.findByText('High profile')).toBeInTheDocument();       // the manager's tile
+    expect((await screen.findAllByText('High profile'))[0]).toBeInTheDocument();       // the manager's tile
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     fireEvent.change(await screen.findByLabelText('Username'), { target: { value: 'abhinav' } });
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(await screen.findByText('Your cases')).toBeInTheDocument();         // the investigator's tile
-    expect(screen.queryByText('High profile')).not.toBeInTheDocument();
+    expect(screen.queryAllByText('High profile')).toHaveLength(0);
   });
 
   it('a late answer about the previous person cannot overwrite who is signed in now', () => {

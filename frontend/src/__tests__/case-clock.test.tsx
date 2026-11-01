@@ -169,6 +169,6 @@ describe('The AI Agent takes a case nobody took', () => {
     expect(card).not.toHaveTextContent('strike');                                           // there was no investigator to blame
     expect(screen.queryByLabelText('With the AI Agent')).not.toBeInTheDocument();           // it is decided now
     expect(screen.getByRole('button', { name: /Overturn decision/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Flag this AI decision/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Question the AI's decision/ })).not.toBeInTheDocument();
   });
 });

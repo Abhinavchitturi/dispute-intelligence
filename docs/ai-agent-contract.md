@@ -115,3 +115,8 @@ In demo mode, a case waiting for the AI shows two buttons, "AI approves" and "AI
 ## Appeals by email
 
 When a decision is made, the seller and the buyer each get an email that lists, by name, the proof both sides sent, and says to email `APPEALS_EMAIL` for further investigation. Point the mail provider's inbound webhook at `POST /api/inbound-mail` (header `X-Inbound-Secret`). An email from the buyer or seller of a decided case, with the case number in the subject, opens a new case (`<case>-A1`) for a different investigator with a manager joined.
+
+## What happens after an OVERTURN
+- The AI's decision is final straight away. The investigator gets a strike, and the manager gets an `AI_OVERTURN` alert to read the case and evidence.
+- The investigator can question the decision with reasons. The manager then gets a `FLAG` alert ("Conflict raised by …") due in 2 days.
+- If the manager agrees with the AI, the strike stays and the investigator gets the reasoning plus a warning. If the manager disagrees, the strike is removed, the investigator is congratulated, and the correction appears in `GET /api/ai-agent/feedback` for training.

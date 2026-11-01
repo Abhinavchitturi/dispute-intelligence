@@ -132,7 +132,7 @@ class StrikeService:
         now = now or datetime.utcnow()
         gap = timedelta(minutes=max(1, settings.ALERT_REMINDER_MINUTES))
         sent = 0
-        for alert in db.query(ManagerAlert).filter(ManagerAlert.status == "OPEN").all():
+        for alert in db.query(ManagerAlert).filter(ManagerAlert.status == "OPEN", ManagerAlert.kind != "AI_OVERTURN").all():
             if now - (alert.last_notified_at or alert.created_at) < gap:
                 continue
             alert.reminder_count = (alert.reminder_count or 0) + 1
