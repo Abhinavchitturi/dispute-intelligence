@@ -9,7 +9,7 @@ Settled cases: each side can say the dispute was settled outside PayPal. It is o
 Dismissed cases: only the buyer can withdraw a claim. PayPal then closes it with no refund and no decision.
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -25,6 +25,7 @@ from backend.app.services.message_service import CLOSED, PENDING_REVIEW, Message
 from backend.app.services.strike_service import StrikeService
 
 OUTCOME_LABEL = {"BUYER_FAVOR": "buyer's favor", "SELLER_FAVOR": "seller's favor"}
+FLAG_DAYS = 2   # a manager settles an investigator's conflict within this many days
 OPPOSITE = {"BUYER_FAVOR": "SELLER_FAVOR", "SELLER_FAVOR": "BUYER_FAVOR"}
 OUTCOME_ACTION = {"BUYER_FAVOR": "DECIDE_FOR_BUYER", "SELLER_FAVOR": "DECIDE_FOR_SELLER"}
 PARTY_WORD = {cat.SELLER: "seller", cat.BUYER: "buyer"}
@@ -143,6 +144,11 @@ class DecisionService:
         cls.finalize(db, dispute, "AI reviewer", final, subject, body, rationale, sandbox, decided_by="INVESTIGATOR" if verdict == "APPROVE" else "AI")
         if verdict == "OVERTURN":
             StrikeService.add_strike(db, investigator, dispute.id, f"The AI reviewer overturned the decision on {dispute.id}.")
+            # The manager sees every overturn, so they can read the case and the evidence and check where it went wrong. This isn't a wait: the AI's call already stands.
+            StrikeService.open_alert(
+                db, "AI_OVERTURN", f"AI overturned {dispute.proposed_by or 'an investigator'} on {dispute.id}",
+                f"The AI reviewer overturned the investigator's {OUTCOME_LABEL[proposed]} decision and ruled for the {OUTCOME_LABEL[final]}. AI's reasons: {rationale}",
+                user_id=investigator.id if investigator else None, dispute_id=dispute.id)
             db.commit()
         return review
 
@@ -225,12 +231,16 @@ class DecisionService:
             raise DecisionError("Explain what the AI got wrong, with your reasons, so the manager can check it.")
         if db.query(Flag).filter(Flag.dispute_id == dispute.id, Flag.status == "OPEN").first():
             raise DecisionError("This case is already flagged and waiting for a manager.")
-        flag = Flag(id=f"FLG-{uuid.uuid4().hex[:10]}", dispute_id=dispute.id, raised_by=user.id if user else "unknown", points=points)
+        due = datetime.utcnow() + timedelta(days=FLAG_DAYS)
+        flag = Flag(id=f"FLG-{uuid.uuid4().hex[:10]}", dispute_id=dispute.id, raised_by=user.id if user else "unknown", points=points, due_at=due)
         db.add(flag)
         db.flush()
         AuditService.record_event(db=db, dispute_id=dispute.id, actor=who, action="AI_DECISION_FLAGGED", status="SUCCESS", source=dispute.source,
                                   result_summary=f"Flagged the AI reviewer's decision as wrong. {points}")
-        StrikeService.open_alert(db, "FLAG", f"{who} flagged an AI decision on {dispute.id}", f"{who} says the AI reviewer got {dispute.id} wrong: {points}",
+        for a in db.query(ManagerAlertModel).filter(ManagerAlertModel.dispute_id == dispute.id, ManagerAlertModel.kind == "AI_OVERTURN", ManagerAlertModel.status == "OPEN").all():
+            a.status, a.sorted_by, a.sorted_at, a.sorted_note = "SORTED", who, datetime.utcnow(), "Replaced by the investigator's conflict"
+        StrikeService.open_alert(db, "FLAG", f"Conflict raised by {who} on {dispute.id}",
+                                 f"{who} disagrees with the AI's decision on {dispute.id}. Reason: {points} Reopen the case and settle it by {due:%d %b} (within {FLAG_DAYS} days).",
                                  user_id=user.id if user else None, dispute_id=dispute.id)
         db.commit()
         return flag
@@ -251,6 +261,14 @@ class DecisionService:
             # The AI stands. Record that a human checked and agreed, which is also useful to the AI team.
             AuditService.record_event(db=db, dispute_id=dispute.id, actor=manager, action="FLAG_UPHELD_AI", status="SUCCESS", source=dispute.source,
                                       result_summary=f"The flag was reviewed and the AI's decision stands. {note}")
+        raiser = db.get(User, flag.raised_by)
+        if raiser:
+            if action == "OVERTURN":
+                StrikeService.notify(db, raiser.id, "FLAG_RESULT", f"Well spotted: the AI was wrong on {dispute.id}",
+                                     f"Congratulations. {manager} checked the case and agreed with you, so the strike is removed. The correction goes to the AI team so it does not repeat the mistake. Manager's note: {note}", dispute.id)
+            else:
+                StrikeService.notify(db, raiser.id, "FLAG_RESULT", f"The AI decision on {dispute.id} stands",
+                                     f"{manager} checked the case and the AI was right, so the strike stays. Why: {note} Warning: please take care not to repeat this. More strikes lead to a block.", dispute.id)
         flag.status = "OVERTURNED" if action == "OVERTURN" else "UPHELD"
         flag.resolved_by, flag.resolved_at, flag.resolution_note = manager, datetime.utcnow(), note
         for a in db.query(ManagerAlertModel).filter(ManagerAlertModel.dispute_id == dispute.id, ManagerAlertModel.kind == "FLAG", ManagerAlertModel.status == "OPEN").all():

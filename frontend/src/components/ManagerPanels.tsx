@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Bot, Check, RotateCcw, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { managerReview, resolveFlag, reviseDecision } from '../api/client';
@@ -151,6 +152,8 @@ export function FlagCard({ flag }: { flag: CaseFlag }) {
         <span className="font-mono font-semibold text-white">{flag.dispute_id}</span>
         <Badge tone={flag.status === 'OPEN' ? 'warn' : flag.status === 'OVERTURNED' ? 'success' : 'neutral'}>{flag.status === 'OPEN' ? 'Open' : flag.status === 'OVERTURNED' ? 'AI overturned' : 'AI upheld'}</Badge>
         <span className="text-xs text-muted">raised by {flag.raised_by}</span>
+        {flag.status === 'OPEN' && flag.due_at && <span className={`text-xs ${new Date(flag.due_at) < new Date() ? 'text-rose-300' : 'text-muted'}`}>settle by {new Date(flag.due_at).toLocaleDateString()}{new Date(flag.due_at) < new Date() ? ' (overdue)' : ''}</span>}
+        <Link to={`/investigate/${flag.dispute_id}`} className="ml-auto text-xs text-brand-soft hover:underline">Open the case and its evidence</Link>
       </div>
       <dl className="mt-3 grid gap-3 text-[13px] sm:grid-cols-2">
         <div><dt className="text-xs uppercase tracking-wider text-muted">The investigator decided</dt><dd className="mt-1 text-white">{mine?.label ?? '—'}</dd></div>
