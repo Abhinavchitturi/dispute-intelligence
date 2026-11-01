@@ -289,15 +289,23 @@ def revise(dispute_id: str, request: ReviseRequest, user: Optional[User] = Depen
 
 class FlagRequest(BaseModel):
     points: str
+    proposed_outcome: Optional[str] = None
+    proposed_reason: Optional[str] = None
+    ai_rationale: Optional[str] = None
 
 
 @router.post("/disputes/{dispute_id}/flag")
-def flag(dispute_id: str, request: FlagRequest, user: Optional[User] = Depends(case_user), db: Session = Depends(get_db)):
+async def flag(dispute_id: str, request: FlagRequest, user: Optional[User] = Depends(case_user), db: Session = Depends(get_db)):
     """An investigator says the AI reviewer got their case wrong, and why. A manager decides."""
     if user and user.role == MANAGER:
         raise HTTPException(status_code=403, detail="Investigators flag decisions. Managers resolve the flags.")
     d = _dispute(db, dispute_id)
     try:
+        if (d.status != "RESOLVED" or d.ai_verdict != "OVERTURN") and request.proposed_outcome in ("BUYER_FAVOR", "SELLER_FAVOR"):
+            if d.status != "PENDING_AI_REVIEW":
+                DecisionService.propose(db, d, user, actor_name(user, "investigator"), request.proposed_outcome, request.proposed_reason or request.points)
+            opposite = "SELLER_FAVOR" if request.proposed_outcome == "BUYER_FAVOR" else "BUYER_FAVOR"
+            await _apply_verdict(db, d, VerdictRequest(verdict="OVERTURN", outcome=opposite, rationale=request.ai_rationale or "AI Reviewer overturned the investigator's proposed decision."), "ai-reviewer")
         f = DecisionService.raise_flag(db, d, user, actor_name(user, "investigator"), request.points)
     except DecisionError as e:
         raise HTTPException(status_code=400, detail=str(e))

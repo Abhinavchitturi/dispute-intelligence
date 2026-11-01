@@ -18,6 +18,8 @@ from backend.app.schemas.audit import (
     ActionExecuteResponse,
     ActionPreviewRequest,
     ActionPreviewResponse,
+    AIReviewRequest,
+    AIReviewAssessment,
 )
 from backend.app.services import evidence_catalog as cat
 from backend.app.services.ai_service import AIService
@@ -153,6 +155,32 @@ async def execute_action(dispute_id: str, request: ActionExecuteRequest, user: O
 
 def _is_sandbox(dispute: Dispute) -> bool:
     return settings.RESOLVEIQ_MODE == "sandbox" and dispute.source == "paypal_sandbox"
+
+
+@router.post("/disputes/{dispute_id}/ai-review", response_model=AIReviewAssessment)
+async def ai_review_decision(
+    dispute_id: str,
+    request: AIReviewRequest,
+    user: Optional[User] = Depends(case_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Independently analyzes the dispute, evidence, and investigator's proposed decision
+    and reasoning before submission. Returns an objective assessment without altering
+    the investigator's decision.
+    """
+    dispute = _get_dispute(db, dispute_id)
+    if request.proposed_outcome not in ("BUYER_FAVOR", "SELLER_FAVOR"):
+        raise HTTPException(status_code=400, detail="Decision must be either BUYER_FAVOR or SELLER_FAVOR.")
+    if not request.proposed_reason or not request.proposed_reason.strip():
+        raise HTTPException(status_code=400, detail="Reasoning is required for AI review.")
+
+    assessment = await AIService.review_decision(
+        dispute=dispute,
+        proposed_outcome=request.proposed_outcome,
+        proposed_reason=request.proposed_reason.strip()
+    )
+    return assessment
 
 
 @router.post("/disputes/{dispute_id}/decision")

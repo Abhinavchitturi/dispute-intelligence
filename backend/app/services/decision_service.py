@@ -221,7 +221,7 @@ class DecisionService:
         if dispute.ai_verdict != "OVERTURN" or dispute.status != "RESOLVED":
             raise DecisionError("You can only flag a case where the AI reviewer overturned your decision.")
         points = (points or "").strip()
-        if len(points) < 30:
+        if len(points) < 10:
             raise DecisionError("Explain what the AI got wrong, with your reasons, so the manager can check it.")
         if db.query(Flag).filter(Flag.dispute_id == dispute.id, Flag.status == "OPEN").first():
             raise DecisionError("This case is already flagged and waiting for a manager.")

@@ -19,7 +19,7 @@ def get_integration_status():
     Never exposes raw secrets or API keys.
     """
     has_paypal_creds = bool(settings.PAYPAL_CLIENT_ID and settings.PAYPAL_CLIENT_SECRET)
-    has_ai_key = bool(settings.AI_API_KEY)
+    has_ai_key = bool(settings.GEMINI_API_KEY or settings.AI_API_KEY)
 
     return IntegrationStatusResponse(
         environment_mode=settings.RESOLVEIQ_MODE,
@@ -32,7 +32,7 @@ def get_integration_status():
         },
         ai_provider={
             "provider": settings.AI_PROVIDER,
-            "model": settings.AI_MODEL,
+            "model": settings.GEMINI_MODEL or settings.AI_MODEL,
             "configured": has_ai_key,
             "fallback_available": True
         },
@@ -68,7 +68,9 @@ async def test_paypal_connectivity():
 @router.post("/integrations/ai/test", response_model=ConnectivityTestResponse)
 async def test_ai_connectivity():
     """Tests configured AI provider connectivity or reports deterministic fallback status."""
-    if settings.AI_PROVIDER == "none" or not settings.AI_API_KEY:
+    ai_key = settings.GEMINI_API_KEY or settings.AI_API_KEY
+    ai_model = settings.GEMINI_MODEL or settings.AI_MODEL
+    if settings.AI_PROVIDER == "none" or not ai_key:
         return ConnectivityTestResponse(
             service="ResolveIQ Intelligence Engine",
             connected=True,
@@ -82,8 +84,8 @@ async def test_ai_connectivity():
         service=f"LLM Provider ({settings.AI_PROVIDER})",
         connected=True,
         status_code=200,
-        message=f"Connected to {settings.AI_PROVIDER} ({settings.AI_MODEL}).",
-        details={"provider": settings.AI_PROVIDER, "model": settings.AI_MODEL}
+        message=f"Connected to {settings.AI_PROVIDER} ({ai_model}).",
+        details={"provider": settings.AI_PROVIDER, "model": ai_model}
     )
 
 @router.post("/integrations/reset-demo-data")

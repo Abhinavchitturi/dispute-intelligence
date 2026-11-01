@@ -1,7 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, ArrowRight, Check, Gavel, Info, Send, Store, ThumbsDown, ThumbsUp, User } from 'lucide-react';
-import { draftActionMessage, executeAction, fetchDisputeDetail, fetchEvidenceOptions, previewAction, submitDecision } from '../api/client';
+import { AlertTriangle, ArrowLeft, ArrowRight, Bot, Check, Clock, Flag, Gavel, Info, Send, ShieldAlert, ShieldCheck, Sparkles, Store, ThumbsDown, ThumbsUp, User } from 'lucide-react';
+import {
+  AIReviewAssessment,
+  draftActionMessage,
+  executeAction,
+  fetchDisputeDetail,
+  fetchEvidenceOptions,
+  previewAction,
+  raiseFlag,
+  requestAiReview,
+  submitDecision,
+} from '../api/client';
 import { EvidenceChecklist } from './EvidenceChecklist';
 import { ClaimPoints } from './ClaimPoints';
 import { useCurrentUser } from '../lib/user';
@@ -32,7 +42,6 @@ const HINTS: Record<string, string> = {
   PENDING_AI_REVIEW: 'A decision on this case is with the AI reviewer. A manager has to reopen it before you can act.',
 };
 
-/** Where the case stands, in a sentence. One concrete document on file is enough to decide, so say so. */
 function hintFor(status: string, onFile: number): string | undefined {
   if (status === 'UNDER_REVIEW') return HINTS.UNDER_REVIEW;
   if (onFile > 0 && HINTS[status]) {
@@ -42,10 +51,6 @@ function hintFor(status: string, onFile: number): string | undefined {
   return HINTS[status];
 }
 
-/**
- * One evidence request PayPal might send: its checklist, its draft, and the investigator's edits to it.
- * The wizard holds one of these per party, so asking the seller and the buyer together keeps them independent.
- */
 function useActionDraft({ disputeId, action, active, step, open, days, choices }: {
   disputeId: string; action: ActionValue; active: boolean; step: number; open: boolean; days: number; choices?: EvidenceRequestOption[];
 }) {
@@ -54,9 +59,7 @@ function useActionDraft({ disputeId, action, active, step, open, days, choices }
   const [edit, setEdit] = useState<string | undefined>();
   useEffect(() => { if (open) { setPicked(undefined); setEdit(undefined); } }, [open]);
 
-  // First time on a request, start from what the case is missing; after that, keep what the investigator picked.
   const chosen: string[] = picked ?? choices?.filter((o) => o.suggested).map((o) => o.evidence_type) ?? [];
-  // A hand-edited message can no longer match the selection once the list or deadline changes, so rebuild it and say so.
   const resetForChange = () => { if (edit !== undefined) { setEdit(undefined); toast('info', 'The list changed, so the message was rebuilt.'); } };
   const toggle = (t: string) => { resetForChange(); setPicked(chosen.includes(t) ? chosen.filter((x) => x !== t) : [...chosen, t]); };
 
@@ -65,9 +68,8 @@ function useActionDraft({ disputeId, action, active, step, open, days, choices }
     queryFn: () => draftActionMessage(disputeId, { action_type: action, requested_evidence: chosen, deadline_days: days }),
     enabled: open && active && step >= 1 && !!choices,
     staleTime: 60_000,
-    placeholderData: keepPreviousData, // keep showing the last draft while a new one loads, so the box doesn't flicker away
+    placeholderData: keepPreviousData,
   });
-  // While a new draft loads we may be holding the previous one. Never treat it as this action's message.
   const holdingOther = !!draft.data && draft.data.action_type !== action;
   const loading = draft.isLoading || draft.isPlaceholderData || holdingOther;
   const message = edit ?? (draft.data && !holdingOther ? draft.data.body : '');
@@ -87,7 +89,6 @@ function useActionPreview({ disputeId, slot, active, enabled, open, days, notes 
   });
 }
 
-/** Before deciding: the facts on the case, sorted by who they help. Deliberately not a verdict. */
 function BalancePanel({ balance }: { balance: EvidenceBalance }) {
   const column = (title: string, items: string[], icon: React.ReactNode, tone: string) => (
     <div>
@@ -118,22 +119,34 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
   const queryClient = useQueryClient();
   const { isManager } = useCurrentUser();
   const [step, setStep] = useState(0);
-  // Asking can be combined (seller and buyer together). Deciding is its own page, reached with "Ready to decide".
   const [selected, setSelected] = useState<ActionValue[]>(['REQUEST_SELLER_EVIDENCE']);
   const [deciding, setDeciding] = useState(false);
   const [days, setDays] = useState(5);
   const [notes, setNotes] = useState('');
   const [reason, setReason] = useState('');
   const [reviewed, setReviewed] = useState(false);
+  const [selectedOutcome, setSelectedOutcome] = useState<'BUYER_FAVOR' | 'SELLER_FAVOR' | null>(null);
+  const [aiAssessment, setAiAssessment] = useState<AIReviewAssessment | null>(null);
 
-  useEffect(() => { if (open) { setStep(0); setSelected(['REQUEST_SELLER_EVIDENCE']); setDeciding(false); setDays(5); setNotes(''); setReason(''); setReviewed(false); } }, [open]);
+  useEffect(() => {
+    if (open) {
+      setStep(0);
+      setSelected(['REQUEST_SELLER_EVIDENCE']);
+      setDeciding(false);
+      setDays(5);
+      setNotes('');
+      setReason('');
+      setReviewed(false);
+      setSelectedOutcome(null);
+      setAiAssessment(null);
+    }
+  }, [open]);
 
   const wantsSeller = selected.includes('REQUEST_SELLER_EVIDENCE');
   const wantsBuyer = selected.includes('REQUEST_BUYER_EVIDENCE');
 
   const detail = useQuery({ queryKey: ['disputeDetail', disputeId], queryFn: () => fetchDisputeDetail(disputeId), enabled: open });
   const options = useQuery({ queryKey: ['evidenceOptions', disputeId], queryFn: () => fetchEvidenceOptions(disputeId), enabled: open && !deciding && (wantsSeller || wantsBuyer) });
-  // The "how the evidence stacks up" facts come with a decision draft. The draft's wording isn't used: an admin sends the notice.
   const balance = useQuery({
     queryKey: ['decisionBalance', disputeId],
     queryFn: () => draftActionMessage(disputeId, { action_type: 'DECIDE_FOR_BUYER' }),
@@ -153,7 +166,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
   const previewBuyer = useActionPreview({ disputeId, slot: buyer, active: wantsBuyer && !deciding, enabled: step === 2, open, days, notes });
   const previews = [...(wantsSeller ? [previewSeller] : []), ...(wantsBuyer ? [previewBuyer] : [])];
 
-  const invalidate = () => ['disputeDetail', 'disputeTimeline', 'dashboardSummary', 'disputes', 'urgentDisputes', 'auditEvents', 'messageThreads', 'disputeMessages', 'evidenceOptions', 'evidenceSummary']
+  const invalidate = () => ['disputeDetail', 'disputeTimeline', 'dashboardSummary', 'disputes', 'urgentDisputes', 'auditEvents', 'messageThreads', 'disputeMessages', 'evidenceOptions', 'evidenceSummary', 'flags', 'notifications']
     .forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
 
   const execute = useMutation({
@@ -166,7 +179,6 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
             requested_evidence: s.chosen, deadline_days: days,
           }));
         } catch (e) {
-          // Don't hide that the first one already went out.
           if (done.length) throw new Error(`The request to the ${partyOf(slots[0].action)} was sent, but the one to the ${partyOf(s.action)} failed: ${(e as Error).message}`);
           throw e;
         }
@@ -194,9 +206,53 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
     onError: (e: Error) => { toast('error', `Couldn't send the decision: ${e.message}`); invalidate(); },
   });
 
+  const aiReview = useMutation({
+    mutationFn: (payload: { proposed_outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR'; proposed_reason: string }) =>
+      requestAiReview(disputeId, payload),
+    onSuccess: (data) => {
+      setAiAssessment(data);
+      const v = data.ai_verdict || data.verdict;
+      toast(
+        'info',
+        `AI Review complete: ${
+          v === 'AGREES' || v === 'AGREE'
+            ? 'AI agrees with this decision (Will Approve)'
+            : v === 'DISAGREES' || v === 'DISAGREE'
+            ? 'AI will OVERTURN this decision'
+            : 'Inconclusive — AI cannot approve yet'
+        }`
+      );
+    },
+    onError: (e: Error) => {
+      toast('error', `AI Review failed: ${e.message}`);
+    },
+  });
+
+  const reportAiOverturn = useMutation({
+    mutationFn: () =>
+      raiseFlag(disputeId, reason.trim(), {
+        proposed_outcome: selectedOutcome ?? undefined,
+        proposed_reason: reason.trim(),
+        ai_rationale: aiAssessment?.reasoning || aiAssessment?.explanation || 'AI Reviewer disagreed with the investigator decision.',
+      }),
+    onSuccess: () => {
+      onDone({
+        message: 'Reported AI overturn to manager for review.',
+        env: 'demo',
+        audit: 'AI decision reported to manager',
+      });
+      toast('success', 'Reported AI decision to manager for review.');
+      invalidate();
+      onClose();
+    },
+    onError: (e: Error) => {
+      toast('error', `Could not report AI decision: ${e.message}`);
+    },
+  });
+
   const pick = (a: ActionValue) => setSelected((cur) => {
-    if (cur.includes(a)) return cur.length > 1 ? cur.filter((x) => x !== a) : cur; // always keep at least one
-    return ACTIONS.map((x) => x.value).filter((v) => cur.includes(v) || v === a);   // stable order: seller, then buyer
+    if (cur.includes(a)) return cur.length > 1 ? cur.filter((x) => x !== a) : cur;
+    return ACTIONS.map((x) => x.value).filter((v) => cur.includes(v) || v === a);
   });
   const changeDays = (d: number) => { slots.forEach((s) => s.resetForChange()); setDays(d); };
   const readyToDecide = () => { setDeciding(true); setStep(1); };
@@ -326,7 +382,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
   };
 
   return (
-    <Modal open={open} onClose={onClose} size="lg" title="Take action" footer={footer}>
+    <Modal open={open} onClose={onClose} size="lg" title={deciding ? 'Ready for Review' : 'Take action'} footer={footer}>
       <ol className="flex items-center gap-2" aria-label="Steps">
         {steps.map((label, i) => (
           <li key={label} className="flex flex-1 items-center gap-2" aria-current={i === step ? 'step' : undefined}>
@@ -356,7 +412,6 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
             </h3>
             <div role="group" aria-label="Ask for evidence" className="grid gap-3 sm:grid-cols-2">{ACTIONS.map(card)}</div>
           </div>
-          {/* Deciding is a different kind of step, so it doesn't sit among the choices. */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
             <p className="max-w-sm text-[13px] text-muted">{isManager ? 'Have what you need? Review everything on file and make your call. As manager, your decision is final and the seller and the buyer are told at once.' : 'Have what you need? Review everything on file and make your call. The AI reviewer checks it before anyone is told.'}</p>
             <Button onClick={readyToDecide} disabled={inReview}><Gavel className="h-4 w-4" />Ready to decide</Button>
@@ -395,26 +450,272 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
           <EvidenceChecklist disputeId={disputeId} title="Evidence on this case" />
           {balance.isLoading ? <Skeleton className="h-28" /> : balance.data?.evidence_balance && <BalancePanel balance={balance.data.evidence_balance} />}
 
-          <section aria-label="Your decision" className="space-y-3 border-t border-line pt-5">
-            <Field label="Why are you deciding this way?">
+          <section aria-label="Your decision" className="space-y-4 border-t border-line pt-5">
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <label className="text-xs font-semibold uppercase tracking-wider text-muted">
+                  1. Select your decision
+                </label>
+                {selectedOutcome && (
+                  <span className="text-xs text-brand-soft">
+                    Selected: {selectedOutcome === 'BUYER_FAVOR' ? "Buyer's favor" : "Seller's favor"}
+                  </span>
+                )}
+              </div>
+              <div role="radiogroup" aria-label="Select decision" className="grid gap-2.5 sm:grid-cols-2">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedOutcome === 'BUYER_FAVOR'}
+                  onClick={() => {
+                    setSelectedOutcome('BUYER_FAVOR');
+                    if (aiAssessment) setAiAssessment(null);
+                  }}
+                  className={cn(
+                    'flex items-center justify-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium transition',
+                    selectedOutcome === 'BUYER_FAVOR'
+                      ? 'border-brand bg-brand/20 text-white shadow-sm ring-1 ring-brand/40'
+                      : 'border-line bg-raised/40 text-slate-300 hover:border-line-strong hover:bg-raised'
+                  )}
+                >
+                  <ThumbsUp className="h-4 w-4 text-emerald-400" />
+                  Buyer's favor
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedOutcome === 'SELLER_FAVOR'}
+                  onClick={() => {
+                    setSelectedOutcome('SELLER_FAVOR');
+                    if (aiAssessment) setAiAssessment(null);
+                  }}
+                  className={cn(
+                    'flex items-center justify-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium transition',
+                    selectedOutcome === 'SELLER_FAVOR'
+                      ? 'border-brand bg-brand/20 text-white shadow-sm ring-1 ring-brand/40'
+                      : 'border-line bg-raised/40 text-slate-300 hover:border-line-strong hover:bg-raised'
+                  )}
+                >
+                  <ThumbsDown className="h-4 w-4 text-amber-400" />
+                  Seller's favor
+                </button>
+              </div>
+            </div>
+
+            <Field label="2. Why are you deciding this way?">
               <Textarea
-                rows={4} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Reason for your decision"
+                rows={4}
+                value={reason}
+                onChange={(e) => {
+                  setReason(e.target.value);
+                  if (aiAssessment) setAiAssessment(null);
+                }}
+                aria-label="Reason for your decision"
                 placeholder="For example: the carrier confirmed delivery to the address on the order, and the buyer sent no footage."
               />
             </Field>
-            <p className="flex gap-2 text-xs text-muted"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />{isManager ? 'As manager, your decision is final. There is no AI review. The seller and the buyer are told straight away, and each gets an email listing the proof both sides sent.' : 'Your reason goes to the AI reviewer with your decision. The seller and the buyer are told once it rules. If it overturns you, that is a strike, and you can flag it to a manager if you think it is wrong.'}</p>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-raised/40 p-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
+                  <Sparkles className="h-3.5 w-3.5 text-brand-soft" />
+                  <span>AI Review</span>
+                </div>
+                <p className="mt-0.5 text-[11px] text-muted">
+                  Independently evaluate the dispute evidence against your decision before submitting.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                loading={aiReview.isPending}
+                disabled={!selectedOutcome || !reason.trim()}
+                onClick={() => {
+                  if (selectedOutcome && reason.trim()) {
+                    aiReview.mutate({ proposed_outcome: selectedOutcome, proposed_reason: reason.trim() });
+                  }
+                }}
+                className="border border-brand/40 bg-brand/10 text-brand-soft hover:bg-brand/20 hover:text-white"
+              >
+                <Sparkles className="h-4 w-4" />
+                {aiReview.isPending ? 'Reviewing...' : 'AI Review'}
+              </Button>
+            </div>
+
+            {aiAssessment && (
+              <div className="space-y-3.5 rounded-2xl border border-line bg-raised/80 p-4 shadow-xl animate-fade-in" aria-label="AI Review Assessment">
+                <div className="flex items-center justify-between border-b border-line pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-brand-soft" />
+                    <span className="text-sm font-semibold tracking-tight text-white">AI Review</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-muted">
+                    {aiAssessment.provider} • {aiAssessment.model}
+                  </div>
+                </div>
+
+                {/* 1. AI Verdict & 2. AI Decision */}
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  <div className="rounded-xl border border-line bg-surface/60 p-3">
+                    <div className="text-[11px] font-semibold text-slate-400">1. AI Verdict:</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className={cn(
+                        "inline-flex items-center rounded-md px-2 py-0.5 font-mono text-xs font-semibold",
+                        (aiAssessment.ai_verdict === 'AGREES' || aiAssessment.verdict === 'AGREE')
+                          ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                          : (aiAssessment.ai_verdict === 'DISAGREES' || aiAssessment.verdict === 'DISAGREE')
+                          ? "bg-rose-500/15 text-rose-400 border border-rose-500/30"
+                          : "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                      )}>
+                        {aiAssessment.ai_verdict || (aiAssessment.verdict === 'AGREE' ? 'AGREES' : aiAssessment.verdict === 'DISAGREE' ? 'DISAGREES' : 'INCONCLUSIVE')}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-line bg-surface/60 p-3">
+                    <div className="text-[11px] font-semibold text-slate-400">2. AI Decision:</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="inline-flex items-center rounded-md border border-line-strong bg-raised px-2 py-0.5 font-mono text-xs font-semibold text-slate-200">
+                        {aiAssessment.ai_decision || aiAssessment.recommendation || 'INSUFFICIENT_EVIDENCE'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Reasoning */}
+                <div className="rounded-xl border border-line bg-surface/60 p-3">
+                  <div className="text-[11px] font-semibold text-slate-400">3. Reasoning:</div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
+                    {aiAssessment.reasoning || aiAssessment.explanation}
+                  </p>
+                </div>
+
+                {/* 4. Key Evidence */}
+                <div className="rounded-xl border border-line bg-surface/60 p-3 text-xs">
+                  <div className="text-[11px] font-semibold text-slate-400">4. Key Evidence:</div>
+                  <div className="mt-2 space-y-2 text-slate-200">
+                    <div>
+                      <div className="font-medium text-emerald-400">• Supporting evidence:</div>
+                      {aiAssessment.key_evidence?.supporting_evidence && aiAssessment.key_evidence.supporting_evidence.length > 0 ? (
+                        <ul className="ml-4 mt-1 list-disc space-y-1 text-slate-300">
+                          {aiAssessment.key_evidence.supporting_evidence.map((item, i) => (
+                            <li key={i}>{item}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="ml-4 mt-1 text-slate-400">None</p>
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-medium text-rose-400">• Contradicting evidence:</div>
+                      {aiAssessment.key_evidence?.contradicting_evidence && aiAssessment.key_evidence.contradicting_evidence.length > 0 ? (
+                        <ul className="ml-4 mt-1 list-disc space-y-1 text-slate-300">
+                          {aiAssessment.key_evidence.contradicting_evidence.map((item, i) => (
+                            <li key={i}>{item}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="ml-4 mt-1 text-slate-400">None</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. Investigator Decision Comparison */}
+                <div className="rounded-xl border border-line bg-surface/60 p-3">
+                  <div className="text-[11px] font-semibold text-slate-400">5. Investigator Decision Comparison:</div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
+                    {aiAssessment.investigator_comparison || aiAssessment.assessment}
+                  </p>
+                </div>
+
+                {/* 6. Evidence Gaps */}
+                <div className="rounded-xl border border-line bg-surface/60 p-3">
+                  <div className="text-[11px] font-semibold text-slate-400">6. Evidence Gaps:</div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
+                    {aiAssessment.evidence_gaps || (aiAssessment.missing_evidence && aiAssessment.missing_evidence.length > 0 ? aiAssessment.missing_evidence.join('; ') : 'No material evidence gaps identified.')}
+                  </p>
+                </div>
+
+                {/* Separate action line after Evidence Gaps */}
+                {(aiAssessment.ai_verdict === 'AGREES' || aiAssessment.verdict === 'AGREE') ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2.5 text-xs font-medium text-emerald-300">
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
+                    <span>AI Agrees with your decision — continue to submit it.</span>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3.5 py-2.5 text-xs font-medium text-rose-200">
+                    <div className="flex items-center gap-2">
+                      <ShieldAlert className="h-4 w-4 shrink-0 text-rose-400" />
+                      <span>AI decided to overturn your decision, but if you decide to report this, click this button:</span>
+                    </div>
+                    <Button
+                      size="sm"
+                      loading={reportAiOverturn.isPending}
+                      onClick={() => reportAiOverturn.mutate()}
+                      className="border border-rose-400/40 bg-rose-500/20 text-rose-100 hover:bg-rose-500/30"
+                    >
+                      <Flag className="h-3.5 w-3.5" />
+                      Report this
+                    </Button>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
+                  <span className="italic">Advisory only. You can revise your reasoning or proceed with your decision.</span>
+                </div>
+              </div>
+            )}
+
+            <p className="flex gap-2 text-xs text-muted">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {isManager
+                ? 'As manager, your decision is final. There is no AI review. The seller and the buyer are told straight away, and each gets an email listing the proof both sides sent.'
+                : 'Your reason goes to the AI reviewer with your decision. The seller and the buyer are told once it rules. If it overturns you, that is a strike, and you can flag it to a manager if you think it is wrong.'}
+            </p>
+
             <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-raised/40 p-3 text-sm text-slate-200">
               <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#0A84FF]" />
               <span>I've reviewed the evidence on file and I'm making this decision.</span>
             </label>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Button variant="primary" loading={decide.isPending && decide.variables === 'BUYER_FAVOR'} disabled={!canDecide} onClick={() => decide.mutate('BUYER_FAVOR')}>
-                <ThumbsUp className="h-4 w-4" />Buyer's favor
+
+            {selectedOutcome ? (
+              <Button
+                variant="primary"
+                loading={decide.isPending}
+                disabled={!canDecide}
+                onClick={() => decide.mutate(selectedOutcome)}
+                className="w-full py-2.5 text-sm"
+              >
+                {selectedOutcome === 'BUYER_FAVOR' ? <ThumbsUp className="h-4 w-4" /> : <ThumbsDown className="h-4 w-4" />}
+                Submit decision ({selectedOutcome === 'BUYER_FAVOR' ? "Buyer's favor" : "Seller's favor"})
               </Button>
-              <Button variant="primary" loading={decide.isPending && decide.variables === 'SELLER_FAVOR'} disabled={!canDecide} onClick={() => decide.mutate('SELLER_FAVOR')}>
-                <ThumbsDown className="h-4 w-4" />Seller's favor
-              </Button>
-            </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Button
+                  variant="primary"
+                  loading={decide.isPending && decide.variables === 'BUYER_FAVOR'}
+                  disabled={!canDecide}
+                  onClick={() => {
+                    setSelectedOutcome('BUYER_FAVOR');
+                    decide.mutate('BUYER_FAVOR');
+                  }}
+                >
+                  <ThumbsUp className="h-4 w-4" />Buyer's favor
+                </Button>
+                <Button
+                  variant="primary"
+                  loading={decide.isPending && decide.variables === 'SELLER_FAVOR'}
+                  disabled={!canDecide}
+                  onClick={() => {
+                    setSelectedOutcome('SELLER_FAVOR');
+                    decide.mutate('SELLER_FAVOR');
+                  }}
+                >
+                  <ThumbsDown className="h-4 w-4" />Seller's favor
+                </Button>
+              </div>
+            )}
             {!reasonOk && reason.length > 0 && <p className="text-xs text-amber-300">Add a little more. The reviewer needs to see your reasoning.</p>}
           </section>
         </div>

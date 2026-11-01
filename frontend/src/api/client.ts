@@ -32,6 +32,33 @@ import {
 
 const API_BASE = '/api';
 
+export interface KeyEvidence {
+  supporting_evidence: string[];
+  contradicting_evidence: string[];
+}
+
+export interface AIReviewAssessment {
+  ai_verdict: 'AGREES' | 'DISAGREES' | 'INCONCLUSIVE';
+  ai_decision: 'FULFILL_BUYER' | 'FULFILL_SELLER' | 'INSUFFICIENT_EVIDENCE';
+  reasoning: string;
+  key_evidence: KeyEvidence;
+  investigator_comparison: string;
+  evidence_gaps: string;
+  model: string;
+  provider: string;
+
+  // Backward compatibility fields
+  verdict?: 'AGREE' | 'DISAGREE' | 'INCONCLUSIVE';
+  agrees?: boolean | null;
+  assessment?: string;
+  explanation?: string;
+  timeline_analysis?: string[];
+  contradictions?: string[];
+  missing_evidence?: string[];
+  key_evidence_analyzed?: string[];
+  recommendation?: string;
+}
+
 export async function fetchDashboardSummary(assignee?: string): Promise<DashboardSummary> {
   const res = await fetch(`${API_BASE}/dashboard/summary${assignee ? `?assignee=${encodeURIComponent(assignee)}` : ''}`);
   if (!res.ok) throw new Error(`Failed to fetch dashboard summary: ${res.statusText}`);
@@ -256,6 +283,11 @@ export async function fetchEvidenceSummary(disputeId: string): Promise<EvidenceS
   return res.json();
 }
 
+/** Independently analyzes the dispute against the investigator's selected decision and reasoning. */
+export function requestAiReview(disputeId: string, payload: { proposed_outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR'; proposed_reason: string }): Promise<AIReviewAssessment> {
+  return post<AIReviewAssessment>(`/disputes/${disputeId}/ai-review`, payload, 'Failed to generate AI review');
+}
+
 /** The investigator's call. It goes to an admin; nobody is told until the admin confirms. */
 export function submitDecision(disputeId: string, payload: { outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR'; reason: string }) {
   return post<{ message: string; status: string }>(`/disputes/${disputeId}/decision`, { ...payload, confirmed: true }, 'Failed to submit the decision');
@@ -308,7 +340,11 @@ export const sortAlert = (id: string, note?: string) => post<ManagerAlert>(`/ale
 export const fetchTeam = () => get<TeamMember[]>('/team', 'Failed to load the team');
 export const unblockUser = (id: string, note?: string) => post<{ success: boolean }>(`/team/${id}/unblock`, { note }, 'Failed to unblock');
 export const fetchFlags = (status?: string, disputeId?: string) => get<CaseFlag[]>(`/flags?${new URLSearchParams({ ...(status ? { status } : {}), ...(disputeId ? { dispute_id: disputeId } : {}) })}`, 'Failed to load flags');
-export const raiseFlag = (disputeId: string, points: string) => post<{ flag_id: string }>(`/disputes/${disputeId}/flag`, { points }, 'Failed to raise the flag');
+export const raiseFlag = (
+  disputeId: string,
+  points: string,
+  extra?: { proposed_outcome?: string; proposed_reason?: string; ai_rationale?: string }
+) => post<{ flag_id: string }>(`/disputes/${disputeId}/flag`, { points, ...extra }, 'Failed to raise the flag');
 export const resolveFlag = (id: string, action: 'UPHOLD_AI' | 'OVERTURN', note: string) => post<CaseFlag>(`/flags/${id}/resolve`, { action, note }, 'Failed to resolve the flag');
 export const reviseDecision = (disputeId: string, outcome: string, note: string) => post<{ outcome: string }>(`/disputes/${disputeId}/revise`, { outcome, note }, 'Failed to overturn the decision');
 export const fetchTraining = () => get<TrainingRow[]>('/ai-training', 'Failed to load the AI feedback');

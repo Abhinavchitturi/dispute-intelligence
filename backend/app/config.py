@@ -17,9 +17,13 @@ class Settings(BaseSettings):
     PAYPAL_WEBHOOK_ID: Optional[str] = None
     
     # AI Provider
-    AI_PROVIDER: str = "none"  # "none", "gemini", "openai", "anthropic"
+    AI_PROVIDER: str = "gemini"  # "none", "gemini", "openai", "anthropic"
     AI_API_KEY: Optional[str] = None
-    AI_MODEL: str = "gemini-1.5-pro"
+    AI_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: Optional[str] = "gemini-3.5-flash-lite"
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-4o-mini"
     
     # Demo mode: seconds before a simulated PayPal/buyer reply arrives
     DEMO_REPLY_DELAY_SECONDS: int = 20
@@ -54,6 +58,14 @@ class Settings(BaseSettings):
     SMTP_USERNAME: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000"
+
+    @property
+    def effective_gemini_api_key(self) -> Optional[str]:
+        return self.GEMINI_API_KEY or self.AI_API_KEY
+
+    @property
+    def effective_gemini_model(self) -> str:
+        return self.GEMINI_MODEL or self.AI_MODEL or "gemini-3.5-flash-lite"
 
     @property
     def cors_origins(self) -> List[str]:

@@ -273,7 +273,9 @@ class DraftService:
     async def _call_llm(cls, context: Dict[str, Any], draft: ActionDraftResponse) -> Dict[str, Any]:
         if settings.AI_PROVIDER != "gemini":
             raise NotImplementedError(f"AI Provider '{settings.AI_PROVIDER}' not configured.")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.AI_MODEL}:generateContent?key={settings.AI_API_KEY}"
+        api_key = settings.GEMINI_API_KEY or settings.AI_API_KEY
+        model = settings.GEMINI_MODEL or settings.AI_MODEL or "gemini-3.5-flash-lite"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         prompt = f"{DRAFT_PROMPT}\nCASE CONTEXT:\n{json.dumps(context, indent=2)}\n\nDRAFT:\nSubject: {draft.subject}\n{draft.body}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(url, json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"response_mime_type": "application/json"}})
@@ -297,7 +299,8 @@ class DraftService:
         context["seller_unable"] = sorted({t for m in dispute.messages if m.direction == "INBOUND" and m.counterparty == cat.SELLER for t in m.unavailable_evidence})
         draft = cls.build_rules_draft(context, action_type, requested_evidence, deadline_days)
 
-        if settings.AI_PROVIDER == "none" or not settings.AI_API_KEY:
+        gemini_key = settings.GEMINI_API_KEY or settings.AI_API_KEY
+        if settings.AI_PROVIDER == "none" or not gemini_key:
             return draft
 
         try:
@@ -314,7 +317,7 @@ class DraftService:
                 "body": body,
                 "cited_record_ids": cited or draft.cited_record_ids,
                 "source": "llm",
-                "model": settings.AI_MODEL,
+                "model": settings.GEMINI_MODEL or settings.AI_MODEL or "gemini-3.5-flash-lite",
             })
         except Exception as e:
             logger.warning(f"LLM draft failed: {e}. Using rules draft.")
