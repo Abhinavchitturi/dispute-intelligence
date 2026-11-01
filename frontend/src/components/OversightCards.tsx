@@ -99,7 +99,7 @@ export function OversightCards({ dispute: d }: { dispute: DisputeDetail }) {
           {d.ai_rationale && <p className="mt-2 text-sm text-slate-300">{d.ai_rationale}</p>}
           {overturned && (
             <p className="mt-2 text-[13px] text-muted">
-              {isManager ? 'The investigator received a strike. If the AI was wrong, overturn it below and the strike comes off.' : result && d.decided_by !== 'MANAGER' ? 'This counted as a strike. If you think the AI got it wrong, flag it to a manager with your reasons.' : 'A manager changed this decision.'}
+              {isManager ? 'The investigator received a strike. If the AI was wrong, overturn it below and the strike comes off.' : result && d.decided_by !== 'MANAGER' ? 'This counted as a strike. If you disagree with the AI, question its decision with your reasons. A manager reopens the case and settles it within 1 to 2 days.' : 'A manager changed this decision.'}
             </p>
           )}
 
@@ -107,20 +107,20 @@ export function OversightCards({ dispute: d }: { dispute: DisputeDetail }) {
             <div className="mt-3">
               {myFlag ? (
                 <p className="text-[13px] text-slate-300">
-                  <Badge tone={myFlag.status === 'OPEN' ? 'warn' : myFlag.status === 'OVERTURNED' ? 'success' : 'neutral'}>{myFlag.status === 'OPEN' ? 'Flagged, waiting for a manager' : myFlag.status === 'OVERTURNED' ? 'A manager overturned the AI' : 'A manager kept the AI decision'}</Badge>
+                  <Badge tone={myFlag.status === 'OPEN' ? 'warn' : myFlag.status === 'OVERTURNED' ? 'success' : 'neutral'}>{myFlag.status === 'OPEN' ? 'With a manager, to be settled within 2 days' : myFlag.status === 'OVERTURNED' ? 'A manager overturned the AI' : 'A manager kept the AI decision'}</Badge>
                   {myFlag.resolution_note && <span className="ml-2 text-muted">{myFlag.resolved_by}: {myFlag.resolution_note}</span>}
                 </p>
               ) : flagging ? (
                 <div className="space-y-2">
                   <Textarea rows={3} value={points} onChange={(e) => setPoints(e.target.value)} aria-label="What the AI got wrong" placeholder="What did the AI get wrong? Give your reasons, with the records that show it." />
                   <div className="flex items-center gap-2">
-                    <Button size="sm" variant="primary" loading={flag.isPending} disabled={points.trim().length < MIN_FLAG} onClick={() => flag.mutate()}><Flag className="h-3.5 w-3.5" />Send to a manager</Button>
+                    <Button size="sm" variant="primary" loading={flag.isPending} disabled={points.trim().length < MIN_FLAG} onClick={() => flag.mutate()}><Flag className="h-3.5 w-3.5" />Send to the manager</Button>
                     <Button size="sm" variant="ghost" onClick={() => setFlagging(false)}>Cancel</Button>
                     {points.length > 0 && points.trim().length < MIN_FLAG && <span className="text-xs text-amber-300">Add more detail so the manager can check it.</span>}
                   </div>
                 </div>
               ) : (
-                <Button size="sm" onClick={() => setFlagging(true)}><Flag className="h-3.5 w-3.5" />Flag this AI decision</Button>
+                <Button size="sm" onClick={() => setFlagging(true)}><Flag className="h-3.5 w-3.5" />Question the AI's decision</Button>
               )}
             </div>
           )}

@@ -308,7 +308,7 @@ def _flag(db: Session, f: Flag) -> dict:
     d = db.query(Dispute).filter(Dispute.id == f.dispute_id).first()
     who = db.get(User, f.raised_by)
     return {"id": f.id, "dispute_id": f.dispute_id, "raised_by": who.display_name if who else f.raised_by, "points": f.points, "status": f.status,
-            "created_at": f.created_at, "resolved_by": f.resolved_by, "resolved_at": f.resolved_at, "resolution_note": f.resolution_note,
+            "created_at": f.created_at, "due_at": f.due_at, "resolved_by": f.resolved_by, "resolved_at": f.resolved_at, "resolution_note": f.resolution_note,
             "investigator_outcome": d.proposed_outcome if d else None, "ai_outcome": d.outcome if d else None, "ai_rationale": d.ai_rationale if d else None,
             "ai_verdict": d.ai_verdict if d else None}
 

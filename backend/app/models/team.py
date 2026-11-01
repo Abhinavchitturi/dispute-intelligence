@@ -108,6 +108,7 @@ class Flag(Base):
     resolved_by = Column(String(128), nullable=True)
     resolved_at = Column(DateTime, nullable=True)
     resolution_note = Column(Text, nullable=True)
+    due_at = Column(DateTime, nullable=True)                  # a manager should settle a flag within a day or two
 
 
 class Email(Base):

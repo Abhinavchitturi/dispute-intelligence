@@ -407,3 +407,55 @@ def test_the_inbound_mail_webhook_checks_its_secret_and_the_sender(monkeypatch):
         assert db.query(Email).filter(Email.direction == "IN").count() >= 3 and db.query(Email).count() > mails_before
     finally:
         db.close()
+
+
+def _raised_by_abhinav(dispute_id):
+    """With sign-in switched off in tests there is no signed-in user, so say who raised the flag."""
+    from backend.app.models.team import Flag
+    db = _db()
+    try:
+        db.query(Flag).filter(Flag.dispute_id == dispute_id).update({"raised_by": db.query(User).filter(User.username == "abhinav").first().id})
+        db.commit()
+    finally:
+        db.close()
+
+
+def _notes(user_name, dispute_id):
+    db = _db()
+    try:
+        u = db.query(User).filter(User.username == user_name).first()
+        return [n for n in db.query(Notification).filter(Notification.user_id == u.id, Notification.dispute_id == dispute_id).all()]
+    finally:
+        db.close()
+
+
+def test_an_ai_overturn_shows_up_for_the_manager_without_waiting_on_them():
+    _overturned("DEMO-DSP-1055")
+    assert _case("DEMO-DSP-1055")["status"] == "RESOLVED"                      # the AI's call is already final
+    assert [a for a in _open_alerts("AI_OVERTURN") if a["dispute_id"] == "DEMO-DSP-1055"]
+
+
+def test_the_conflict_has_a_two_day_deadline_and_a_clear_message_to_the_manager():
+    _overturned("DEMO-DSP-1066")
+    assert _flag("DEMO-DSP-1066").status_code == 200
+    flag = client.get("/api/flags", params={"dispute_id": "DEMO-DSP-1066"}).json()[0]
+    assert flag["due_at"]
+    alert = next(a for a in _open_alerts("FLAG") if a["dispute_id"] == "DEMO-DSP-1066")
+    assert "Conflict raised by" in alert["title"] and "signed delivery" in alert["body"]
+    assert not [a for a in _open_alerts("AI_OVERTURN") if a["dispute_id"] == "DEMO-DSP-1066"]
+
+
+def test_the_investigator_is_congratulated_or_warned_when_the_manager_decides():
+    _overturned("DEMO-DSP-1069")
+    _flag("DEMO-DSP-1069")
+    _raised_by_abhinav("DEMO-DSP-1069")
+    f = client.get("/api/flags", params={"dispute_id": "DEMO-DSP-1069"}).json()[0]
+    client.post(f"/api/flags/{f['id']}/resolve", json={"action": "OVERTURN", "note": "The signature is on file. The AI missed it."})
+    assert any("Congratulations" in n.body and "strike is removed" in n.body for n in _notes("abhinav", "DEMO-DSP-1069"))
+
+    _overturned("DEMO-DSP-1056", "BUYER_FAVOR", "SELLER_FAVOR")
+    _flag("DEMO-DSP-1056")
+    _raised_by_abhinav("DEMO-DSP-1056")
+    f = client.get("/api/flags", params={"dispute_id": "DEMO-DSP-1056"}).json()[0]
+    client.post(f"/api/flags/{f['id']}/resolve", json={"action": "UPHOLD_AI", "note": "The AI's reasoning holds up."})
+    assert any("strike stays" in n.body and "not to repeat" in n.body and "reasoning holds up" in n.body for n in _notes("abhinav", "DEMO-DSP-1056"))

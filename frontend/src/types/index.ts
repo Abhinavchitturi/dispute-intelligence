@@ -385,7 +385,7 @@ export interface SessionUser {
 }
 
 export interface ManagerAlert {
-  id: string; kind: 'STRIKES' | 'BLOCKED' | 'FLAG' | 'APPEAL' | 'REQUEST' | 'AI_TAKEOVER'; user_id: string | null; dispute_id: string | null; title: string; body: string;
+  id: string; kind: 'STRIKES' | 'BLOCKED' | 'FLAG' | 'APPEAL' | 'REQUEST' | 'AI_TAKEOVER' | 'AI_OVERTURN'; user_id: string | null; dispute_id: string | null; title: string; body: string;
   strike_level: number | null; status: 'OPEN' | 'SORTED'; created_at: string; last_notified_at: string; reminder_count: number;
   sorted_by: string | null; sorted_at: string | null; sorted_note: string | null;
 }
@@ -399,7 +399,7 @@ export interface TeamMember {
 }
 
 export interface CaseFlag {
-  id: string; dispute_id: string; raised_by: string; points: string; status: 'OPEN' | 'UPHELD' | 'OVERTURNED'; created_at: string;
+  id: string; dispute_id: string; raised_by: string; points: string; status: 'OPEN' | 'UPHELD' | 'OVERTURNED'; created_at: string; due_at: string | null;
   resolved_by: string | null; resolved_at: string | null; resolution_note: string | null;
   investigator_outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null; ai_outcome: string | null; ai_rationale: string | null; ai_verdict: string | null;
 }

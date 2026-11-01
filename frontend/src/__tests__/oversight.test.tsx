@@ -224,8 +224,8 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
   it('the investigator can flag the AI with reasons, but only once they have written enough', async () => {
     api(base());
     page();
-    fireEvent.click(await screen.findByRole('button', { name: /Flag this AI decision/ }));
-    const send = screen.getByRole('button', { name: /Send to a manager/ });
+    fireEvent.click(await screen.findByRole('button', { name: /Question the AI's decision/ }));
+    const send = screen.getByRole('button', { name: /Send to the manager/ });
     expect(send).toBeDisabled();
     fireEvent.change(screen.getByLabelText('What the AI got wrong'), { target: { value: 'too short' } });
     expect(send).toBeDisabled();
@@ -240,7 +240,7 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
     page();
     expect(await screen.findByText('A manager overturned the AI')).toBeInTheDocument();
     expect(screen.getByText(/PayPal: You were right\./)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Flag this AI decision/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Question the AI's decision/ })).not.toBeInTheDocument();
   });
 
   it('a manager sees that the investigator took a strike and can overturn the AI, but cannot flag', async () => {
@@ -249,7 +249,7 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
     page();
     const card = await screen.findByLabelText('AI review');
     expect(within(card).getByText(/received a strike/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Flag this AI decision/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Question the AI's decision/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Overturn decision/ })).toBeInTheDocument();
   });
 
@@ -258,7 +258,7 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
     page();
     const card = await screen.findByLabelText('AI review');
     expect(within(card).getByText('Approved the investigator')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Flag this AI decision/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Question the AI's decision/ })).not.toBeInTheDocument();
   });
 
   it('in the demo, lets you stand in for the AI reviewer while a decision waits for it', async () => {
