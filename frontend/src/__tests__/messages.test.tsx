@@ -174,27 +174,13 @@ describe('MessageThread (PayPal, the seller and the buyer)', () => {
       render(wrap(<MessageThread disputeId="D-1" disputeStatus="WAITING_FOR_BOTH_RESPONSES" />));
     };
 
-    it('records that the seller says settled, and says it is NOT settled until the buyer agrees', async () => {
-      run(detail({ seller_settled_at: '2026-01-02T10:00:00' }));
-      const status = await screen.findByRole('status');
-      expect(status).toHaveTextContent('The seller says this was settled outside PayPal');
-      expect(status).toHaveTextContent('not settled until the buyer confirms too');
-      expect(within(screen.getByLabelText('Seller chat')).getByText("Says it's settled")).toBeInTheDocument();
-      expect(within(screen.getByLabelText('Buyer chat')).queryByText("Says it's settled")).not.toBeInTheDocument();
-      // The seller has already said it, so they can't say it twice.
-      expect(within(screen.getByLabelText('Demo controls for the seller')).getByRole('button', { name: /Seller says settled/ })).toBeDisabled();
-    });
-
-    it('lets the demo play each side saying settled, and only the buyer withdrawing', async () => {
+    it('has no settled option, and only the buyer can withdraw', async () => {
       run();
-      fireEvent.click(await screen.findByRole('button', { name: /Seller says settled/ }));
+      expect(screen.queryByRole('button', { name: /says settled/ })).not.toBeInTheDocument();
+      fireEvent.click(await screen.findByRole('button', { name: /Buyer withdraws claim/ }));
       await waitFor(() => expect(declared).toHaveLength(1));
-      expect(declared[0].url).toMatch(/\/parties\/SELLER\/declare$/);
-      expect(declared[0].body).toEqual({ kind: 'SETTLED' });
-      fireEvent.click(screen.getByRole('button', { name: /Buyer withdraws claim/ }));
-      await waitFor(() => expect(declared).toHaveLength(2));
-      expect(declared[1].url).toMatch(/\/parties\/BUYER\/declare$/);
-      expect(declared[1].body).toEqual({ kind: 'WITHDRAWN' });
+      expect(declared[0].url).toMatch(/\/parties\/BUYER\/declare$/);
+      expect(declared[0].body).toEqual({ kind: 'WITHDRAWN' });
       expect(within(screen.getByLabelText('Demo controls for the seller')).queryByRole('button', { name: /withdraw/i })).not.toBeInTheDocument();
     });
 

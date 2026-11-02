@@ -54,7 +54,7 @@ describe('Distribute cases', () => {
   it('shows how many cases are waiting and a minus and plus for each person, all at zero to start', async () => {
     const dialog = await open();
     expect(within(dialog).getByText(/30 cases/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/2 high-profile cases are kept for you/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/2 are high profile/)).toBeInTheDocument();
     for (const name of ['Abhinav Chitturi', 'Susmitha', 'Jahnavi']) {
       expect(n(dialog, name)).toHaveTextContent('0');
       expect(within(dialog).getByRole('button', { name: `Fewer cases for ${name}` })).toBeDisabled();   // can't go below none
@@ -87,7 +87,7 @@ describe('Distribute cases', () => {
     for (const name of ['Abhinav Chitturi', 'Susmitha', 'Jahnavi']) expect(n(dialog, name)).toHaveTextContent('10');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Hand out 30 cases' }));
     await waitFor(() => expect(calls.some((c) => c.url.endsWith('/cases/distribute'))).toBe(true));
-    expect(sent()).toEqual({ counts: { 'U-a': 10, 'U-s': 10, 'U-j': 10 }, include_high_profile: false });
+    expect(sent()).toEqual({ counts: { 'U-a': 10, 'U-s': 10, 'U-j': 10 } });
     expect(await screen.findByText('Handed out 30 cases: Abhinav Chitturi 10, Susmitha 10, Jahnavi 10.')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
@@ -116,21 +116,7 @@ describe('Distribute cases', () => {
     const dialog = await open();
     plus(dialog, 'Susmitha', 4);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Hand out 4 cases' }));
-    await waitFor(() => expect(sent()).toEqual({ counts: { 'U-s': 4 }, include_high_profile: false }));
-  });
-
-  it('can include the high-profile cases, which adds them to what can be given out', async () => {
-    const dialog = await open();
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Include high-profile cases/ }));
-    expect(within(dialog).getByRole('status')).toHaveTextContent('32 cases are waiting for an owner');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Split evenly' }));
-    expect(n(dialog, 'Abhinav Chitturi')).toHaveTextContent('11');                                  // 32 across three: 11, 11, 10
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Include high-profile cases/ }));  // take them out again
-    await waitFor(() => {
-      const total = ['Abhinav Chitturi', 'Susmitha', 'Jahnavi'].reduce((a, name) => a + Number(n(dialog, name).textContent), 0);
-      expect(total).toBe(30);                                                                       // trimmed so it still fits
-    });
-    expect(within(dialog).getByRole('button', { name: 'Hand out 30 cases' })).toBeEnabled();
+    await waitFor(() => expect(sent()).toEqual({ counts: { 'U-s': 4 } }));
   });
 
   it("shows the server's reason when it can't", async () => {

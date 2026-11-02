@@ -6,7 +6,7 @@ import { Badge, Card, EmptyState, ErrorState, Meter, PageHeader, SearchInput, Se
 import { money, pastOutcomeLabel, reasonLabel, Tone } from '../lib/format';
 import { useDebounced } from '../lib/hooks';
 
-const OUTCOME_TONE: Record<string, Tone> = { MERCHANT_FAVOR: 'success', BUYER_FAVOR: 'danger', SETTLED: 'info', DISMISSED: 'neutral' };
+const OUTCOME_TONE: Record<string, Tone> = { MERCHANT_FAVOR: 'success', BUYER_FAVOR: 'danger' };
 
 export function SimilarCasesPage() {
   const [reason, setReason] = useState('ALL');
@@ -36,8 +36,6 @@ export function SimilarCasesPage() {
           <option value="ALL">All outcomes</option>
           <option value="MERCHANT_FAVOR">Seller favor</option>
           <option value="BUYER_FAVOR">Buyer favor</option>
-          <option value="SETTLED">Settled</option>
-          <option value="DISMISSED">Dismissed</option>
         </Select>
       </div>
 

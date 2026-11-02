@@ -8,14 +8,14 @@ import {
   fetchDisputeDetail,
   fetchEvidenceOptions,
   previewAction,
-  raiseFlag,
   requestAiReview,
   submitDecision,
+  dismissNoResponse,
 } from '../api/client';
 import { EvidenceChecklist } from './EvidenceChecklist';
 import { ClaimPoints } from './ClaimPoints';
 import { useCurrentUser } from '../lib/user';
-import { ActionExecuteResult, EvidenceBalance, EvidenceRequestOption } from '../types';
+import { ActionExecuteResult, EvidenceRequestOption } from '../types';
 import { Badge, Button, Field, Modal, Select, Skeleton, Textarea, useToast } from './ui/kit';
 import { cn, titleCase } from '../lib/format';
 
@@ -89,24 +89,46 @@ function useActionPreview({ disputeId, slot, active, enabled, open, days, notes 
   });
 }
 
-function BalancePanel({ balance }: { balance: EvidenceBalance }) {
-  const column = (title: string, items: string[], icon: React.ReactNode, tone: string) => (
-    <div>
-      <h4 className={cn('mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider', tone)}>{icon}{title} <span className="font-normal text-muted">({items.length})</span></h4>
-      {items.length ? (
-        <ul className="space-y-1.5">{items.map((t) => <li key={t} className="flex gap-2 text-[13px] text-slate-200"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />{t}</li>)}</ul>
-      ) : <p className="text-[13px] text-muted">Nothing on this side.</p>}
-    </div>
-  );
+/** The AI's second opinion on a decision, before it is sent. Plain words first, the evidence behind it second. */
+export function AiReviewPanel({ a, mine, reviewer }: { a: AIReviewAssessment; mine: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null; reviewer?: string }) {
+  const verdict = a.ai_verdict || (a.verdict === 'AGREE' ? 'AGREES' : a.verdict === 'DISAGREE' ? 'DISAGREES' : 'INCONCLUSIVE');
+  const decision = a.ai_decision || a.recommendation || '';
+  const side = decision === 'FULFILL_BUYER' ? "the buyer's favor" : decision === 'FULFILL_SELLER' ? "the seller's favor" : decision === 'DISMISS_NO_RESPONSE' ? 'dismissing the case' : null;
+  const tone = verdict === 'AGREES' ? 'ok' : verdict === 'DISAGREES' ? 'bad' : 'wait';
+  const headline = reviewer ? (verdict === 'AGREES' ? `The AI agrees with ${reviewer}: ${side ?? 'the decision'}.` : verdict === 'DISAGREES' ? `The AI disagrees with ${reviewer}: it points to ${side ?? 'the other side'}.` : "The AI can't decide this on the evidence on file.")
+    : verdict === 'AGREES' ? `The AI agrees with you: ${side ?? 'your decision'}.`
+    : verdict === 'DISAGREES' ? `The AI sees it differently: ${side ?? 'the other side'}.`
+    : "The AI can't decide yet.";
+  const tidy = (t: string) => t.replace(/^\[[^\]]+\]\s*/, '').replace(/^[A-Z_]+:\s*/, '');
+  const found = (a.key_evidence?.supporting_evidence ?? []).map(tidy);
+  const against = (a.key_evidence?.contradicting_evidence ?? []).map(tidy);
+  const gaps = a.evidence_gaps || (a.missing_evidence?.length ? a.missing_evidence.join('; ') : '');
+  const accent = { ok: 'border-emerald-400/30 bg-emerald-400/[.06] text-emerald-200', bad: 'border-rose-400/30 bg-rose-400/[.06] text-rose-200', wait: 'border-amber-400/30 bg-amber-400/[.06] text-amber-200' }[tone];
+  const Icon = tone === 'ok' ? ShieldCheck : tone === 'bad' ? ShieldAlert : Clock;
+  const list = (items: string[], empty: string) => items.length
+    ? <ul className="space-y-1.5">{items.map((t, i) => <li key={i} className="flex gap-2 text-[13px] leading-snug text-slate-300"><span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-slate-500" />{t}</li>)}</ul>
+    : <p className="text-[13px] text-muted">{empty}</p>;
   return (
-    <section aria-label="How the evidence stacks up" className="rounded-xl border border-line bg-raised/40 p-4">
-      <h3 className="text-sm font-semibold text-white">How the evidence stacks up</h3>
-      <p className="mt-0.5 text-xs text-muted">Facts from the records, sorted by who they help. It isn't a verdict. The call is yours.</p>
-      <div className="mt-3 grid gap-4 sm:grid-cols-2">
-        {column('Toward the buyer', balance.toward_buyer, <ThumbsUp className="h-3.5 w-3.5" />, 'text-amber-300')}
-        {column('Toward the seller', balance.toward_seller, <ThumbsDown className="h-3.5 w-3.5" />, 'text-emerald-300')}
+    <section aria-label="AI Review Assessment" className="space-y-4 rounded-2xl border border-line bg-raised/60 p-5 animate-fade-in">
+      <div className={cn('flex items-start gap-3 rounded-xl border px-4 py-3', accent)}>
+        <Icon aria-hidden className="mt-0.5 h-5 w-5 shrink-0" />
+        <div className="min-w-0">
+          <p className="text-[15px] font-semibold text-white">{headline}</p>
+          {a.reasoning || a.explanation ? <p className="mt-1 text-[13px] leading-relaxed text-slate-200">{a.reasoning || a.explanation}</p> : null}
+        </div>
       </div>
-      {balance.other.length > 0 && <p className="mt-3 border-t border-line pt-3 text-xs text-muted">Also on file: {balance.other.join(', ')}</p>}
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div><h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">What it relied on</h4>{list(found, 'Nothing on file.')}</div>
+        <div><h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">What weakens the other side</h4>{list(against, 'Nothing stands out.')}</div>
+      </div>
+      {(a.investigator_comparison || a.assessment) && (
+        <div><h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">On your reasoning</h4><p className="text-[13px] leading-relaxed text-slate-300">{a.investigator_comparison || a.assessment}</p></div>
+      )}
+      {gaps && <div><h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Still missing</h4><p className="text-[13px] leading-relaxed text-slate-300">{gaps}</p></div>}
+      <p className={cn('border-t border-line pt-3 text-xs text-muted', reviewer && 'hidden')}>
+        This is advice, not a ruling. {verdict === 'DISAGREES' && mine ? 'You can still send your decision. If the AI overturns it after you send it, you will be able to report that to a manager.' : 'You can change your reasoning or send your decision as it is.'}
+        <span className="ml-2 font-mono text-[11px] opacity-60">{a.provider}</span>
+      </p>
     </section>
   );
 }
@@ -147,11 +169,6 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
 
   const detail = useQuery({ queryKey: ['disputeDetail', disputeId], queryFn: () => fetchDisputeDetail(disputeId), enabled: open });
   const options = useQuery({ queryKey: ['evidenceOptions', disputeId], queryFn: () => fetchEvidenceOptions(disputeId), enabled: open && !deciding && (wantsSeller || wantsBuyer) });
-  const balance = useQuery({
-    queryKey: ['decisionBalance', disputeId],
-    queryFn: () => draftActionMessage(disputeId, { action_type: 'DECIDE_FOR_BUYER' }),
-    enabled: open && deciding,
-  });
 
   const base = { disputeId, step, open, days };
   const seller = useActionDraft({ ...base, action: 'REQUEST_SELLER_EVIDENCE', active: wantsSeller && !deciding, choices: options.data?.seller });
@@ -195,6 +212,12 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
     onError: (e: Error) => { toast('error', `Action failed: ${e.message}`); invalidate(); },
   });
 
+  const dismiss = useMutation({
+    mutationFn: () => dismissNoResponse(disputeId),
+    onSuccess: (r) => { onDone({ message: r.message, env: 'demo', audit: 'Dismissed: no buyer response' }); toast('success', r.message); invalidate(); onClose(); },
+    onError: (e: Error) => { toast('error', e.message); invalidate(); },
+  });
+
   const decide = useMutation({
     mutationFn: (outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR') => submitDecision(disputeId, { outcome, reason: reason.trim() }),
     onSuccess: (r) => {
@@ -211,7 +234,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
       requestAiReview(disputeId, payload),
     onSuccess: (data) => {
       setAiAssessment(data);
-      const v = data.ai_verdict || data.verdict;
+      const v: string = data.ai_verdict || data.verdict;
       toast(
         'info',
         `AI Review complete: ${
@@ -225,28 +248,6 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
     },
     onError: (e: Error) => {
       toast('error', `AI Review failed: ${e.message}`);
-    },
-  });
-
-  const reportAiOverturn = useMutation({
-    mutationFn: () =>
-      raiseFlag(disputeId, reason.trim(), {
-        proposed_outcome: selectedOutcome ?? undefined,
-        proposed_reason: reason.trim(),
-        ai_rationale: aiAssessment?.reasoning || aiAssessment?.explanation || 'AI Reviewer disagreed with the investigator decision.',
-      }),
-    onSuccess: () => {
-      onDone({
-        message: 'Reported AI overturn to manager for review.',
-        env: 'demo',
-        audit: 'AI decision reported to manager',
-      });
-      toast('success', 'Reported AI decision to manager for review.');
-      invalidate();
-      onClose();
-    },
-    onError: (e: Error) => {
-      toast('error', `Could not report AI decision: ${e.message}`);
     },
   });
 
@@ -416,6 +417,12 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
             <p className="max-w-sm text-[13px] text-muted">{isManager ? 'Have what you need? Review everything on file and make your call. As manager, your decision is final and the seller and the buyer are told at once.' : 'Have what you need? Review everything on file and make your call. The AI reviewer checks it before anyone is told.'}</p>
             <Button onClick={readyToDecide} disabled={inReview}><Gavel className="h-4 w-4" />Ready to decide</Button>
           </div>
+          {detail.data?.buyer_silent && (
+            <div role="group" aria-label="The buyer did not respond" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/30 bg-amber-400/[.07] p-4">
+              <p className="max-w-md text-[13px] text-amber-50">The buyer's last day to respond has passed and nothing came back. The case can be dismissed. The AI checks it, and the buyer is told how to open a new case.</p>
+              <Button variant="primary" loading={dismiss.isPending} onClick={() => dismiss.mutate()}>Dismiss: buyer didn't respond</Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -448,7 +455,6 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
         <div className="space-y-5 animate-fade-in">
           {detail.data && <ClaimPoints points={detail.data.claim_points} />}
           <EvidenceChecklist disputeId={disputeId} title="Evidence on this case" />
-          {balance.isLoading ? <Skeleton className="h-28" /> : balance.data?.evidence_balance && <BalancePanel balance={balance.data.evidence_balance} />}
 
           <section aria-label="Your decision" className="space-y-4 border-t border-line pt-5">
             <div>
@@ -542,130 +548,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
               </Button>
             </div>
 
-            {aiAssessment && (
-              <div className="space-y-3.5 rounded-2xl border border-line bg-raised/80 p-4 shadow-xl animate-fade-in" aria-label="AI Review Assessment">
-                <div className="flex items-center justify-between border-b border-line pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-brand-soft" />
-                    <span className="text-sm font-semibold tracking-tight text-white">AI Review</span>
-                  </div>
-                  <div className="text-[11px] font-mono text-muted">
-                    {aiAssessment.provider} • {aiAssessment.model}
-                  </div>
-                </div>
-
-                {/* 1. AI Verdict & 2. AI Decision */}
-                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                  <div className="rounded-xl border border-line bg-surface/60 p-3">
-                    <div className="text-[11px] font-semibold text-slate-400">1. AI Verdict:</div>
-                    <div className="mt-1 flex items-center gap-2">
-                      <span className={cn(
-                        "inline-flex items-center rounded-md px-2 py-0.5 font-mono text-xs font-semibold",
-                        (aiAssessment.ai_verdict === 'AGREES' || aiAssessment.verdict === 'AGREE')
-                          ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
-                          : (aiAssessment.ai_verdict === 'DISAGREES' || aiAssessment.verdict === 'DISAGREE')
-                          ? "bg-rose-500/15 text-rose-400 border border-rose-500/30"
-                          : "bg-amber-500/15 text-amber-400 border border-amber-500/30"
-                      )}>
-                        {aiAssessment.ai_verdict || (aiAssessment.verdict === 'AGREE' ? 'AGREES' : aiAssessment.verdict === 'DISAGREE' ? 'DISAGREES' : 'INCONCLUSIVE')}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-line bg-surface/60 p-3">
-                    <div className="text-[11px] font-semibold text-slate-400">2. AI Decision:</div>
-                    <div className="mt-1 flex items-center gap-2">
-                      <span className="inline-flex items-center rounded-md border border-line-strong bg-raised px-2 py-0.5 font-mono text-xs font-semibold text-slate-200">
-                        {aiAssessment.ai_decision || aiAssessment.recommendation || 'INSUFFICIENT_EVIDENCE'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. Reasoning */}
-                <div className="rounded-xl border border-line bg-surface/60 p-3">
-                  <div className="text-[11px] font-semibold text-slate-400">3. Reasoning:</div>
-                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
-                    {aiAssessment.reasoning || aiAssessment.explanation}
-                  </p>
-                </div>
-
-                {/* 4. Key Evidence */}
-                <div className="rounded-xl border border-line bg-surface/60 p-3 text-xs">
-                  <div className="text-[11px] font-semibold text-slate-400">4. Key Evidence:</div>
-                  <div className="mt-2 space-y-2 text-slate-200">
-                    <div>
-                      <div className="font-medium text-emerald-400">• Supporting evidence:</div>
-                      {aiAssessment.key_evidence?.supporting_evidence && aiAssessment.key_evidence.supporting_evidence.length > 0 ? (
-                        <ul className="ml-4 mt-1 list-disc space-y-1 text-slate-300">
-                          {aiAssessment.key_evidence.supporting_evidence.map((item, i) => (
-                            <li key={i}>{item}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="ml-4 mt-1 text-slate-400">None</p>
-                      )}
-                    </div>
-                    <div>
-                      <div className="font-medium text-rose-400">• Contradicting evidence:</div>
-                      {aiAssessment.key_evidence?.contradicting_evidence && aiAssessment.key_evidence.contradicting_evidence.length > 0 ? (
-                        <ul className="ml-4 mt-1 list-disc space-y-1 text-slate-300">
-                          {aiAssessment.key_evidence.contradicting_evidence.map((item, i) => (
-                            <li key={i}>{item}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="ml-4 mt-1 text-slate-400">None</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* 5. Investigator Decision Comparison */}
-                <div className="rounded-xl border border-line bg-surface/60 p-3">
-                  <div className="text-[11px] font-semibold text-slate-400">5. Investigator Decision Comparison:</div>
-                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
-                    {aiAssessment.investigator_comparison || aiAssessment.assessment}
-                  </p>
-                </div>
-
-                {/* 6. Evidence Gaps */}
-                <div className="rounded-xl border border-line bg-surface/60 p-3">
-                  <div className="text-[11px] font-semibold text-slate-400">6. Evidence Gaps:</div>
-                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
-                    {aiAssessment.evidence_gaps || (aiAssessment.missing_evidence && aiAssessment.missing_evidence.length > 0 ? aiAssessment.missing_evidence.join('; ') : 'No material evidence gaps identified.')}
-                  </p>
-                </div>
-
-                {/* Separate action line after Evidence Gaps */}
-                {(aiAssessment.ai_verdict === 'AGREES' || aiAssessment.verdict === 'AGREE') ? (
-                  <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2.5 text-xs font-medium text-emerald-300">
-                    <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
-                    <span>AI Agrees with your decision — continue to submit it.</span>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3.5 py-2.5 text-xs font-medium text-rose-200">
-                    <div className="flex items-center gap-2">
-                      <ShieldAlert className="h-4 w-4 shrink-0 text-rose-400" />
-                      <span>AI decided to overturn your decision, but if you decide to report this, click this button:</span>
-                    </div>
-                    <Button
-                      size="sm"
-                      loading={reportAiOverturn.isPending}
-                      onClick={() => reportAiOverturn.mutate()}
-                      className="border border-rose-400/40 bg-rose-500/20 text-rose-100 hover:bg-rose-500/30"
-                    >
-                      <Flag className="h-3.5 w-3.5" />
-                      Report this
-                    </Button>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
-                  <span className="italic">Advisory only. You can revise your reasoning or proceed with your decision.</span>
-                </div>
-              </div>
-            )}
+            {aiAssessment && <AiReviewPanel a={aiAssessment} mine={selectedOutcome} />}
 
             <p className="flex gap-2 text-xs text-muted">
               <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />

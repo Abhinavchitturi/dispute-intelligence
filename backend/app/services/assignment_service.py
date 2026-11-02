@@ -56,8 +56,6 @@ def distribute(db: Session, manager: str, investigator_ids: Optional[List[str]],
     if not people:
         return {"assigned": {}, "total": 0, "left_unassigned": 0, "people": 0}
     q = db.query(Dispute).filter(Dispute.status.in_(OPEN_STATUSES), Dispute.assigned_to.is_(None))
-    if not include_high_profile:
-        q = q.filter(~high_profile_filter())  # those are the manager's
     cases = q.order_by(Dispute.priority_score.desc(), Dispute.id).all()
 
     load = {u.id: open_cases(db, u.display_name) for u in people}
@@ -92,8 +90,6 @@ def distribute_counts(db: Session, manager: str, counts: Dict[str, int], include
         raise ValueError("One of those people can't be given cases right now.")
     quota = {i: n for i, n in counts.items() if n > 0}
     q = db.query(Dispute).filter(Dispute.status.in_(OPEN_STATUSES), Dispute.assigned_to.is_(None))
-    if not include_high_profile:
-        q = q.filter(~high_profile_filter())
     cases = q.order_by(Dispute.priority_score.desc(), Dispute.id).all()
     if sum(quota.values()) > len(cases):
         raise ValueError(f"That is {sum(quota.values())} cases but only {len(cases)} {'is' if len(cases) == 1 else 'are'} waiting.")

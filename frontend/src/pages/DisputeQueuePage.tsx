@@ -13,8 +13,8 @@ import { cn, isUrgent, money, OPEN_STATUSES, reasonLabel, timeLeft, WAITING_STAT
 import { useDebounced, useNow } from '../lib/hooks';
 import { useCurrentUser } from '../lib/user';
 
-type View = 'all' | 'mine' | 'high' | 'unassigned' | 'ai' | 'progress' | 'new' | 'waiting' | 'ready' | 'review' | 'urgent' | 'due';
-const VIEWS: View[] = ['all', 'mine', 'high', 'unassigned', 'ai', 'progress', 'new', 'waiting', 'ready', 'review', 'urgent', 'due'];
+type View = 'all' | 'mine' | 'high' | 'unassigned' | 'ai' | 'progress' | 'new' | 'waiting' | 'ready' | 'review' | 'urgent' | 'due' | 'done';
+const VIEWS: View[] = ['all', 'mine', 'high', 'unassigned', 'ai', 'progress', 'new', 'waiting', 'ready', 'review', 'urgent', 'due', 'done'];
 const SORTS = {
   priority: { by: 'priority_score', order: 'desc', label: 'Most urgent' },
   amount: { by: 'amount', order: 'desc', label: 'Highest amount' },
@@ -34,6 +34,7 @@ function matchesView(d: DisputeSummary, view: View, now: number, me: string) {
     case 'ai': return OPEN_STATUSES.includes(d.status) && d.ai_owned;
     case 'high': return OPEN_STATUSES.includes(d.status) && d.is_high_profile;
     case 'review': return d.status === 'PENDING_AI_REVIEW';
+    case 'done': return d.status === 'RESOLVED' || d.status === 'CLOSED';   // decided, settled or dismissed
     case 'new': return d.status === 'OPEN';
     case 'progress': return d.status === 'IN_PROGRESS';
     case 'waiting': return WAITING_STATUSES.includes(d.status);
@@ -84,7 +85,7 @@ export function DisputeQueuePage() {
   const counts = useMemo(() => {
     const list = data ?? [];
     const c = (v: View) => list.filter((d) => matchesView(d, v, now, user.name)).length;
-    return { all: list.length, mine: c('mine'), high: c('high'), unassigned: c('unassigned'), ai: c('ai'), progress: c('progress'), new: c('new'), waiting: c('waiting'), ready: c('ready'), review: c('review'), urgent: c('urgent'), due: c('due') };
+    return { all: list.length, mine: c('mine'), high: c('high'), unassigned: c('unassigned'), ai: c('ai'), progress: c('progress'), new: c('new'), waiting: c('waiting'), ready: c('ready'), review: c('review'), urgent: c('urgent'), due: c('due'), done: c('done') };
   }, [data, now, user.name]);
 
   const rows = useMemo(() => (data ?? []).filter((d) => matchesView(d, view, now, user.name)), [data, view, now, user.name]);
@@ -118,7 +119,7 @@ export function DisputeQueuePage() {
           onChange={setView}
           options={[
             { value: 'all', label: 'All', count: counts.all },
-            ...(isManager ? [{ value: 'mine' as View, label: 'Your cases', count: counts.mine }, { value: 'high' as View, label: 'High profile', count: counts.high }, { value: 'unassigned' as View, label: 'Unassigned', count: counts.unassigned }, { value: 'ai' as View, label: 'With the AI Agent', count: counts.ai }] : []),
+            ...(isManager ? [{ value: 'high' as View, label: 'High profile', count: counts.high }, { value: 'unassigned' as View, label: 'Unassigned', count: counts.unassigned }] : []),
             { value: 'new', label: 'New', count: counts.new },
             { value: 'waiting', label: 'Waiting on replies', count: counts.waiting },
             { value: 'progress', label: 'In progress', count: counts.progress },
@@ -126,6 +127,7 @@ export function DisputeQueuePage() {
             { value: 'review', label: 'With AI review', count: counts.review },
             { value: 'urgent', label: 'Urgent', count: counts.urgent },
             { value: 'due', label: 'Due soon', count: counts.due },
+            { value: 'done', label: 'Completed', count: counts.done },
           ]}
         />
 

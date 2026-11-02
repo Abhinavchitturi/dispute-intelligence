@@ -196,7 +196,7 @@ describe('ResolveIQ Page Components Suite', () => {
               reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
               case_summary: 'INR claim where tracking showed delivered, address verification unknown.',
               evidence_attributes: { tracking_status: 'DELIVERED', address_match: 'unknown' },
-              outcome: 'SETTLED',
+              outcome: 'BUYER_FAVOR',
               amount: 450.0,
               currency: 'USD'
             }
@@ -212,7 +212,7 @@ describe('ResolveIQ Page Components Suite', () => {
       expect(screen.getByText(/Historical Precedent Explorer/i)).toBeInTheDocument();
       expect(screen.getByText('HIST-CASE-203')).toBeInTheDocument();
       expect(screen.getByText(/INR claim where tracking showed delivered/i)).toBeInTheDocument();
-      expect(screen.getAllByText('Settled').length).toBeGreaterThan(1); // filter option + outcome badge
+      expect(screen.queryByText('Settled')).not.toBeInTheDocument(); // no settled option or badge
     });
   });
 

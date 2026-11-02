@@ -137,7 +137,7 @@ class MessageService:
             msgs.append(DisputeMessage(
                 id=_new_id(), dispute_id=dispute.id, direction="OUTBOUND", counterparty=party, action_type=action_type,
                 subject=subject or f"{label} for dispute {dispute.id}",
-                body=short_notice(full) if party == cat.SELLER else f"{full}\n\n{email_service.appeal_text(dispute)}",
+                body=short_notice(full) if party == cat.SELLER else (email_service.buyer_loss_text(dispute) if DECISION_ACTIONS[action_type] == "SELLER_FAVOR" else full),
                 source="paypal_sandbox" if sandbox else "synthetic", awaiting_reply=False, reply_due_at=None,
                 is_read=True, audit_event_id=audit_event_id, created_at=now,
             ))

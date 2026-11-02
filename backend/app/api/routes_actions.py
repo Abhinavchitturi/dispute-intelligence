@@ -170,8 +170,8 @@ async def ai_review_decision(
     the investigator's decision.
     """
     dispute = _get_dispute(db, dispute_id)
-    if request.proposed_outcome not in ("BUYER_FAVOR", "SELLER_FAVOR"):
-        raise HTTPException(status_code=400, detail="Decision must be either BUYER_FAVOR or SELLER_FAVOR.")
+    if request.proposed_outcome not in ("BUYER_FAVOR", "SELLER_FAVOR", "DISMISSED"):
+        raise HTTPException(status_code=400, detail="Decision must be BUYER_FAVOR, SELLER_FAVOR or DISMISSED.")
     if not request.proposed_reason or not request.proposed_reason.strip():
         raise HTTPException(status_code=400, detail="Reasoning is required for AI review.")
 
@@ -181,6 +181,22 @@ async def ai_review_decision(
         proposed_reason=request.proposed_reason.strip()
     )
     return assessment
+
+
+@router.post("/disputes/{dispute_id}/dismiss-no-response")
+async def dismiss_no_response(dispute_id: str, user: Optional[User] = Depends(case_user), db: Session = Depends(get_db)):
+    """Once the buyer's last day has passed with no answer, the investigator dismisses the case. The AI checks it, the buyer is told how to open a new case."""
+    from backend.app.services import reopen_service
+    dispute = _get_dispute(db, dispute_id)
+    if dispute.status in ("RESOLVED", "CLOSED") or dispute.status == "PENDING_AI_REVIEW":
+        raise HTTPException(status_code=400, detail=f"This dispute is already {dispute.status.lower().replace('_', ' ')}.")
+    if not reopen_service.buyer_went_silent(dispute):
+        raise HTTPException(status_code=400, detail="The buyer still has time to respond, or already did. A case can only be dismissed for no response after the buyer's last day.")
+    assessment = await AIService.review_decision(dispute=dispute, proposed_outcome="DISMISSED", proposed_reason="The buyer did not respond to the evidence request before the deadline.")
+    reopen_service.dismiss_for_silence(db, dispute)
+    db.commit()
+    return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "outcome": dispute.outcome, "ai_verdict": assessment.ai_verdict,
+            "message": "Dismissed. The buyer was told, and sent a link to open a new case."}
 
 
 @router.post("/disputes/{dispute_id}/decision")
@@ -201,6 +217,14 @@ async def submit_decision(dispute_id: str, request: DecisionSubmitRequest, user:
                     "message": "Decided. The seller and the buyer have been told."}
     except DecisionError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if settings.AI_AUTO_REVIEW:
+        from backend.app.services import ai_reviewer
+        if await ai_reviewer.review_one(db, dispute):
+            db.refresh(dispute)
+            side = "buyer's" if dispute.outcome == "BUYER_FAVOR" else "seller's"
+            msg = (f"The AI agreed. Decided in the {side} favor, and the seller and the buyer have been told." if dispute.ai_verdict == "APPROVE"
+                   else f"The AI disagreed and ruled in the {side} favor instead. That counts as a strike. If you think it is wrong, report it on the case.")
+            return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "outcome": dispute.outcome, "ai_verdict": dispute.ai_verdict, "message": msg}
     return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "proposed_outcome": dispute.proposed_outcome,
             "message": "Sent for AI review. Nobody has been told yet."}
 

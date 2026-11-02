@@ -172,6 +172,17 @@ describe('Team', () => {
     expect(within(list).queryByRole('button', { name: /Unblock/ })).not.toBeInTheDocument();
   });
 
+  it('a manager can reset an investigator\'s strikes at any time', async () => {
+    signInAs('MANAGER');
+    const calls = api([member()]);
+    mount(<TeamPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset strikes' }));
+    fireEvent.change(screen.getByLabelText("Note for resetting Susmitha's strikes"), { target: { value: 'Fresh start.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to zero' }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/team/U2/reset-strikes'))).toBe(true));
+    expect(calls.find((c) => c.url.endsWith('/reset-strikes'))!.body).toEqual({ note: 'Fresh start.' });
+  });
+
   it('a blocked investigator can be unblocked by the manager', async () => {
     signInAs('MANAGER');
     const calls = api([member({ is_blocked: true, strikes: 10, blocked_reason: '10 strikes. The limit is 10.' })]);
@@ -224,7 +235,7 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
   it('the investigator can flag the AI with reasons, but only once they have written enough', async () => {
     api(base());
     page();
-    fireEvent.click(await screen.findByRole('button', { name: /Question the AI's decision/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Report this/ }));
     const send = screen.getByRole('button', { name: /Send to the manager/ });
     expect(send).toBeDisabled();
     fireEvent.change(screen.getByLabelText('What the AI got wrong'), { target: { value: 'too short' } });
@@ -240,7 +251,29 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
     page();
     expect(await screen.findByText('A manager overturned the AI')).toBeInTheDocument();
     expect(screen.getByText(/PayPal: You were right\./)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Question the AI's decision/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Report this/ })).not.toBeInTheDocument();
+  });
+
+  it('a manager settles a conflict on the case: both sides of it, the AI\'s analysis, then Train the AI', async () => {
+    signInAs('MANAGER');
+    const flag = { id: 'F1', dispute_id: 'D-1', status: 'OPEN', raised_by: 'Abhinav Chitturi', points: 'The signature is on file and the AI ignored it.', due_at: '2099-01-01T00:00:00', investigator_outcome: 'SELLER_FAVOR' };
+    api(base({ conflict_due_at: '2099-01-01T00:00:00', conflict_by: 'Abhinav Chitturi' }), { flags: [flag] });
+    const inner = global.fetch as any;
+    global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/ai-review')) return ok({ ai_verdict: 'DISAGREES', ai_decision: 'FULFILL_BUYER', reasoning: 'The footage shows no carrier.', key_evidence: { supporting_evidence: ['[E1] BUYER_CAMERA_FOOTAGE: No carrier visible'], contradicting_evidence: [] }, investigator_comparison: 'Your reasoning is outweighed.', evidence_gaps: 'None.', provider: 'rule_based', model: 'm' });
+      if (url.endsWith('/flags/F1/resolve')) { calls.push({ url, body: JSON.parse(init!.body as string) }); return ok({ ...flag, status: 'OVERTURNED' }); }
+      return inner(url, init);
+    }) as any;
+    page();
+    const card = await screen.findByLabelText('Reopened by the manager');
+    expect(within(card).getByText('What the AI said')).toBeInTheDocument();
+    expect(within(card).getByText(/What Abhinav Chitturi says/)).toBeInTheDocument();
+    expect(await within(card).findByText(/The signature is on file and the AI ignored it\./)).toBeInTheDocument();
+    expect(await within(card).findByText('The AI disagrees with Abhinav Chitturi: it points to the buyer\'s favor.')).toBeInTheDocument();
+    expect(within(card).getByText('No carrier visible')).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: /Train the AI/ }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/flags/F1/resolve'))).toBe(true));
+    expect(calls.find((c) => c.url.endsWith('/resolve'))!.body.action).toBe('OVERTURN');
   });
 
   it('a manager sees that the investigator took a strike and can overturn the AI, but cannot flag', async () => {
@@ -249,7 +282,7 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
     page();
     const card = await screen.findByLabelText('AI review');
     expect(within(card).getByText(/received a strike/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Question the AI's decision/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Report this/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Overturn decision/ })).toBeInTheDocument();
   });
 
@@ -258,16 +291,15 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
     page();
     const card = await screen.findByLabelText('AI review');
     expect(within(card).getByText('Approved the investigator')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Question the AI's decision/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Report this/ })).not.toBeInTheDocument();
   });
 
-  it('in the demo, lets you stand in for the AI reviewer while a decision waits for it', async () => {
+  it('has no hand controls for the AI: it reviews a decision the moment it is sent', async () => {
     api(base({ status: 'PENDING_AI_REVIEW', outcome: null, ai_verdict: null, decided_by: null }));
     page();
-    const demo = await screen.findByLabelText('Demo: stand in for the AI reviewer');
-    fireEvent.click(within(demo).getByRole('button', { name: 'AI overturns' }));
-    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/ai-verdict/simulate'))).toBe(true));
-    expect(calls.find((c) => c.url.endsWith('/ai-verdict/simulate'))!.body).toMatchObject({ verdict: 'OVERTURN', outcome: 'BUYER_FAVOR' }); // the opposite of the investigator's call
+    expect(await screen.findByLabelText('With the AI reviewer')).toHaveTextContent('reviews every decision the moment it is sent');
+    expect(screen.queryByRole('button', { name: 'AI approves' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'AI overturns' })).not.toBeInTheDocument();
   });
 
   it('in the demo, lets the buyer email to appeal a decided case', async () => {

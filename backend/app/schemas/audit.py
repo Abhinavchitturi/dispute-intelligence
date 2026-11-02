@@ -97,7 +97,7 @@ class AssignRequest(BaseModel):
 
 
 class DeclareRequest(BaseModel):
-    kind: str  # SETTLED, or WITHDRAWN (buyer only)
+    kind: str  # WITHDRAWN (buyer only)
 
 
 class AIReviewRequest(BaseModel):
@@ -136,3 +136,5 @@ class AIReviewAssessment(BaseModel):
     recommendation: Optional[str] = None
     model: str = "resolveiq-ai-judge-v1"
     provider: str = "rule_based"
+    learned_from: Optional[str] = None     # set when the ruling follows a lesson: the case it was taught by
+    lesson_id: Optional[str] = None

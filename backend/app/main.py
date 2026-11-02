@@ -22,9 +22,10 @@ from backend.app.api.routes_auth import router as auth_router
 from backend.app.api.routes_oversight import router as oversight_router
 from backend.app.api.routes_users import router as users_router
 from backend.app.api.routes_assignment import router as assignment_router
+from backend.app.api.routes_public import router as public_router
 from backend.app.services.accounts import ensure_users
 from backend.app.services.strike_service import StrikeService
-from backend.app.services import case_clock
+from backend.app.services import ai_reviewer, case_clock
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("resolveiq")
@@ -39,9 +40,13 @@ async def _reminder_loop():
             n = StrikeService.remind_due(db)
             if n:
                 logger.info("Sent %s manager reminder(s).", n)
+            if settings.AI_AUTO_REVIEW:
+                ruled = await ai_reviewer.review_pending(db)
+                if ruled:
+                    logger.info("The AI reviewer ruled on %s decision(s).", ruled)
             moved = case_clock.tick(db)
-            if moved["handed_to_ai"]:
-                logger.info("Handed %s unassigned case(s) to the AI Agent.", moved["handed_to_ai"])
+            if moved["auto_assigned"]:
+                logger.info("Assigned %s unassigned case(s) to investigators at random.", moved["auto_assigned"])
         except Exception:  # a failed reminder must not stop the next one
             logger.exception("Reminder check failed")
         finally:
@@ -123,6 +128,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(oversight_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(assignment_router, prefix="/api")
+app.include_router(public_router, prefix="/api")
 
 if __name__ == "__main__":
     import uvicorn

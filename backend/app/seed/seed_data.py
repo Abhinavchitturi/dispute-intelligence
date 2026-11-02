@@ -32,6 +32,94 @@ def _seed_answered_requests(db: Session, dispute_id: str, reason: str, now: date
                             submitted_at=answered_at, availability_status="AVAILABLE", metadata_json=json.dumps({"provided_by": party})))
 
 
+def _seed_silent_buyer(db: Session, dispute_id: str, now: datetime) -> None:
+    """The seller answered with proof, but the buyer was asked and never replied, and the deadline has passed. The next time anyone loads the app it is dismissed."""
+    seller_at, buyer_at = now - timedelta(days=6, hours=1), now - timedelta(days=6)
+    for party, items, subject, ask, asked_at in (
+        ("SELLER", ["CARRIER_TRACKING"], "Evidence request to seller", "Please send the carrier tracking for this shipment.", seller_at),
+        ("BUYER", ["BUYER_STATEMENT"], "Evidence request to buyer", "Please give us your account of what happened.", buyer_at),
+    ):
+        action = f"REQUEST_{party}_EVIDENCE"
+        out_id = f"MSG-SEED-{dispute_id[-4:]}-{party[0]}-OUT"
+        due = (asked_at + timedelta(days=5)).isoformat()
+        db.add(DisputeMessage(id=out_id, dispute_id=dispute_id, direction="OUTBOUND", counterparty=party, action_type=action, subject=f"{subject} for dispute {dispute_id}",
+                              body=ask, source="synthetic", awaiting_reply=(party == "BUYER"), is_read=True, created_at=asked_at,
+                              reply_due_at=(asked_at + timedelta(days=5)) if party == "BUYER" else None, meta_json=json.dumps({"requested_evidence": items, "deadline": due})))
+        if party == "SELLER":
+            answered_at = now - timedelta(days=5, hours=12)
+            db.add(DisputeMessage(id=f"MSG-SEED-{dispute_id[-4:]}-S-IN", dispute_id=dispute_id, direction="INBOUND", counterparty="SELLER", action_type=action,
+                                  subject=f"Re: {subject} for dispute {dispute_id}", body="Carrier tracking attached: the parcel was delivered and signed for.", source="synthetic",
+                                  awaiting_reply=False, in_reply_to=out_id, is_read=True, created_at=answered_at,
+                                  meta_json=json.dumps({"provided_evidence": items, "unable_to_provide": []})))
+            db.add(Evidence(id=f"DEMO-EVID-{dispute_id[-4:]}-SRQ", dispute_id=dispute_id, evidence_type="CARRIER_TRACKING", description="Provided by seller: Carrier tracking attached: the parcel was delivered and signed for.",
+                            source="synthetic", submitted_at=answered_at, availability_status="AVAILABLE", metadata_json=json.dumps({"provided_by": "SELLER"})))
+
+
+# Cases where the AI's rule-based analysis rules one way, and the investigator knows something the records can't show. Each is reported and
+# waiting for a manager. Train the AI sides with the investigator. Keep the AI decision leaves the AI's ruling as it is.
+WRONG_AI_CASES = {
+    "DEMO-DSP-1104": {
+        "investigator": "Abhinav Chitturi", "proposed": "SELLER_FAVOR", "ai_outcome": "BUYER_FAVOR",
+        "evidence": ("BUYER_CAMERA_FOOTAGE", "Provided by buyer: Porch camera video, 2026-10-26, 14:00 to 18:00. No carrier visible. (porch-camera-2026-10-26.mp4, 1m 48s, 23 MB)",
+                     {"provided_by": "BUYER", "file_name": "porch-camera-2026-10-26.mp4", "content_type": "video/mp4", "size_bytes": 24117248, "duration_seconds": 108, "storage": "paypal"}),
+        "delivered_at": datetime(2026, 10, 31, 11, 40),
+        "reason": "UPS scanned the parcel as delivered to the front porch on 31 October. The buyer's footage is from 26 October, five days earlier, so it can't show the delivery.",
+        "report": "The buyer's footage is dated 26 October, but UPS delivered on 31 October. It covers the wrong days, so it proves nothing about the delivery. The AI treated it as the deciding evidence.",
+    },
+    "DEMO-DSP-1105": {
+        "investigator": "Jahnavi", "proposed": "SELLER_FAVOR", "ai_outcome": "BUYER_FAVOR",
+        "evidence": None,
+        "reason": "The return was delivered to 18 Dock Road, but the seller's return address is 220 Mill Street. The carrier left it at a different business, so the seller never received it.",
+        "report": "The tracking says delivered, but to 18 Dock Road, which is not the seller's return address (220 Mill Street). The AI took 'delivered' to mean the seller got the item, and never checked where. The buyer used the wrong label.",
+    },
+}
+
+
+# A fresh case shaped exactly like DEMO-DSP-1104: the buyer's footage is from the wrong day. Before the AI is taught, it rules for the buyer.
+# After a manager presses Train the AI on 1104, it rules for the seller here and says it learned that from 1104.
+LOOKALIKE_CASE = "DEMO-DSP-1106"
+
+
+def _seed_lookalike_case(db: Session, dispute_id: str) -> None:
+    d = db.get(Dispute, dispute_id)
+    if not d:
+        return
+    if d.order and d.order.shipment:
+        d.order.shipment.delivered_at = datetime(2026, 10, 31, 15, 5)
+    db.add(Evidence(id=f"DEMO-EVID-{dispute_id[-4:]}-X1", dispute_id=dispute_id, evidence_type="BUYER_CAMERA_FOOTAGE",
+                    description="Provided by buyer: Porch camera video, 2026-10-27, 09:00 to 13:00. No carrier visible. (porch-camera-2026-10-27.mp4, 2m 05s, 31 MB)",
+                    source="synthetic", submitted_at=datetime.utcnow() - timedelta(days=1), availability_status="AVAILABLE",
+                    metadata_json=json.dumps({"provided_by": "BUYER", "file_name": "porch-camera-2026-10-27.mp4", "content_type": "video/mp4", "size_bytes": 32505856, "duration_seconds": 125, "storage": "paypal"})))
+
+
+def _seed_wrong_ai_case(db: Session, dispute_id: str) -> None:
+    """A case where the AI and the investigator disagree, the investigator has reported it, and only a manager can settle it."""
+    from backend.app.services.ai_service import AIService
+    from backend.app.services.decision_service import DecisionService
+    spec = WRONG_AI_CASES[dispute_id]
+    investigator = db.query(User).filter(User.display_name == spec["investigator"]).first()
+    d = db.get(Dispute, dispute_id)
+    if not investigator or not d:
+        return
+    now = datetime.utcnow()
+    if spec.get("delivered_at") and d.order and d.order.shipment:
+        d.order.shipment.delivered_at = spec["delivered_at"]
+    if spec["evidence"]:
+        etype, desc, meta = spec["evidence"]
+        db.add(Evidence(id=f"DEMO-EVID-{dispute_id[-4:]}-X1", dispute_id=dispute_id, evidence_type=etype, description=desc, source="synthetic",
+                        submitted_at=now - timedelta(days=1), availability_status="AVAILABLE", metadata_json=json.dumps(meta)))
+    db.flush()
+    DecisionService.propose(db, d, spec["proposed"], spec["reason"], investigator.display_name)
+    # The AI's own analysis, saved as it was when it ruled, so the manager reads exactly what the AI saw.
+    assessment = AIService.generate_deterministic_review(AIService.build_case_context(d), spec["proposed"], spec["reason"])
+    why = assessment.reasoning or assessment.explanation
+    side = "buyer's" if spec["ai_outcome"] == "BUYER_FAVOR" else "seller's"
+    body = f"Dispute {d.id}\n\nDECISION\nResolved in the {side} favor.\n\nWHAT HAPPENS NEXT\n- The buyer is refunded.\n- The seller is debited.\n\nREVIEW\n- {why}"
+    DecisionService.ai_verdict(db, d, "OVERTURN", spec["ai_outcome"], why, assessment.model, f"Decision on dispute {d.id}: resolved in the {side} favor", body, False,
+                               assessment=assessment.model_dump())
+    DecisionService.raise_flag(db, d, investigator, investigator.display_name, spec["report"])
+
+
 def seed_database(db: Session = None) -> None:
     should_close = False
     if db is None:
@@ -657,6 +745,84 @@ def seed_database(db: Session = None) -> None:
             }
         ]
 
+        # Fifteen cases for Susmitha to work through on her own. All are Open: nobody has been asked for evidence yet.
+        # Some clearly favor the seller, some the buyer, and a few are close, so the decision flow and the AI review each get exercised.
+        INR, SNAD, RET = "MERCHANDISE_OR_SERVICE_NOT_RECEIVED", "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED", "CANCELLED_OR_RETURNED"
+        susmitha_cases = [
+            # (merchant, item, amount, reason, status, buyer claim, tracking, address match, carrier, evidence type, evidence note)
+            ("Cedar Lane Books", "Hardcover Atlas Collection", 85.0, INR, "OPEN", "The books never showed up.", "DELIVERED", "yes", "UPS", "PROOF_OF_DELIVERY_SIGNATURE", "Signed for at the front door by the buyer's household."),
+            ("Pixel Barn", "Mechanical Keyboard", 140.0, SNAD, "OPEN", "The keys are a different switch type from the listing.", "DELIVERED", "yes", "FedEx", "PRODUCT_PHOTO", "Listing photo and the buyer's photo show the same switch type."),
+            ("Willow Home", "Memory Foam Pillow Set", 64.0, RET, "OPEN", "I sent the pillows back and was never refunded.", "DELIVERED", "yes", "USPS", "RETURN_CARRIER_TRACKING", "Return delivered to the seller 9 days ago. No refund on record."),
+            ("TrailMix Outdoors", "Two-Person Tent", 230.0, INR, "OPEN", "Tracking says delivered, but I never got it.", "DELIVERED", "no", "UPS", "GPS_COORDINATES", "Delivery scan is on a different street from the order address."),
+            ("Brightside Audio", "Bluetooth Soundbar", 175.0, SNAD, "OPEN", "The soundbar has no Bluetooth, which the listing promised.", "DELIVERED", "yes", "FedEx", "PHOTO_PROOF", "Buyer photo of the box and spec sheet, which lists Bluetooth 5.0."),
+            ("Harbor Coffee Co", "Single-Origin Beans, 2 kg", 48.0, INR, "OPEN", "My order never arrived.", "DELIVERED", "yes", "USPS", "PROOF_OF_DELIVERY_SIGNATURE", "Delivery photo shows the parcel at the buyer's door."),
+            ("Studio Nine Prints", "Framed Canvas Print", 120.0, SNAD, "OPEN", "The print arrived with a torn corner.", "DELIVERED", "yes", "UPS", "PHOTO_PROOF", "Buyer photos show a torn corner and a crushed box."),
+            ("Fleet Wheels", "Kids' Balance Bike", 96.0, RET, "OPEN", "I returned the bike within the window.", "DELIVERED", "yes", "FedEx", "RETURN_CARRIER_TRACKING", "Return tracking shows it arriving at the seller 6 days ago. No refund."),
+            ("Lumen Lighting", "Smart LED Floor Lamp", 79.0, INR, "OPEN", "The lamp never arrived.", "DELIVERED", "yes", "UPS", "CARRIER_TRACKING", "Carrier tracking shows delivered to the order address."),
+            ("Nordic Knits", "Wool Throw Blanket", 112.0, SNAD, "OPEN", "It is acrylic, not wool as listed.", "DELIVERED", "yes", "USPS", "PRODUCT_PHOTO", "Label in the buyer's photo says 100% acrylic. The listing says wool."),
+            ("Copper Kettle Kitchen", "Ceramic Cookware Set", 210.0, INR, "OPEN", "Nothing came and I want my money back.", "IN_TRANSIT", "unknown", "FedEx", "CARRIER_TRACKING", "Tracking shows in transit for 11 days."),
+            ("Peak Fitness", "Adjustable Dumbbell Pair", 260.0, SNAD, "OPEN", "One dumbbell is missing its weight plates.", "DELIVERED", "yes", "UPS", "PHOTO_PROOF", "Buyer photo of the box contents."),
+            ("Moss & Fern Garden", "Raised Garden Bed Kit", 135.0, RET, "OPEN", "I returned half of the kit and got no refund.", "DELIVERED", "yes", "USPS", "RETURN_CARRIER_TRACKING", "Partial return received at the seller."),
+            ("Urban Stitch", "Denim Jacket (M)", 72.0, INR, "OPEN", "Wrong address, I never got it.", "DELIVERED", "no", "USPS", "GPS_COORDINATES", "Delivery scan is two blocks from the order address."),
+            ("Quill & Ink Stationery", "Fountain Pen Gift Set", 58.0, SNAD, "OPEN", "The nib is bent.", "DELIVERED", "yes", "FedEx", "PHOTO_PROOF", "Buyer photo of the bent nib."),
+        ]
+        buyers = ["Nia Okafor", "Liam Chen", "Priya Nair", "Tomas Rivera", "Hannah Weiss", "Ravi Patel", "Chloe Martin", "Omar Haddad", "Sofia Rossi", "Ben Carter", "Yuki Tanaka", "Grace Liu", "Diego Alvarez", "Mia Johansson", "Sam Okoye"]
+        susmitha_ids = []
+        for n, (merchant, item, amount, reason, status, claim, track, addr, carrier, ev_type, ev_note) in enumerate(susmitha_cases):
+            case_id = f"DEMO-DSP-{1070 + n}"
+            susmitha_ids.append(case_id)
+            handle = buyers[n].split()[0].lower()
+            cases_def.append({
+                "id": case_id, "buyer": f"{buyers[n]} ({handle}_demo)", "merchant": merchant, "item": item, "amount": amount, "reason": reason,
+                "status": status, "due_hours": 24 + (n % 5) * 18, "buyer_claim": claim, "evidence_status": "PARTIAL",
+                "tracking_status": track, "addr_match": addr, "carrier": carrier, "evidence_type": ev_type, "evidence_desc": ev_note,
+            })
+
+        # Open cases for everyone else: six each for Abhinav and Jahnavi, and five high-profile ones (over $1,000) for the manager.
+        # Nothing has been asked of the seller or the buyer yet, so none of these is Ready to decide. That only happens once the evidence is in.
+        more_cases = [
+            ("Abhinav Chitturi", "Granite & Oak Furniture", "Walnut Bookshelf", 310.0, INR, "The bookshelf never arrived.", "IN_TRANSIT", "unknown", "UPS", "CARRIER_TRACKING", "Tracking has shown in transit for 9 days."),
+            ("Abhinav Chitturi", "Beacon Electronics", "Noise-Cancelling Headphones", 189.0, SNAD, "The left earcup has no sound.", "DELIVERED", "yes", "FedEx", "PHOTO_PROOF", "Buyer video summary and a photo of the box."),
+            ("Abhinav Chitturi", "Fernwood Apparel", "Waterproof Rain Jacket", 99.0, RET, "I returned it and got no refund.", "DELIVERED", "yes", "USPS", "RETURN_CARRIER_TRACKING", "Return shows delivered to the seller 5 days ago."),
+            ("Abhinav Chitturi", "Sunrise Pet Supply", "Automatic Pet Feeder", 74.0, INR, "Delivered somewhere else, not to me.", "DELIVERED", "no", "USPS", "GPS_COORDINATES", "Delivery scan is on the next street."),
+            ("Abhinav Chitturi", "Atlas Tools", "Cordless Drill Set", 155.0, SNAD, "The battery is a lower capacity than listed.", "DELIVERED", "yes", "UPS", "PRODUCT_PHOTO", "Battery label in the buyer's photo says 1.5Ah. The listing says 4.0Ah."),
+            ("Abhinav Chitturi", "Little Loom Toys", "Wooden Train Set", 62.0, INR, "Package never came.", "DELIVERED", "yes", "USPS", "PROOF_OF_DELIVERY_SIGNATURE", "Signed for by a household member."),
+            ("Jahnavi", "Saffron Kitchenware", "Cast Iron Skillet Set", 118.0, SNAD, "One pan arrived cracked.", "DELIVERED", "yes", "FedEx", "PHOTO_PROOF", "Buyer photos of a cracked pan."),
+            ("Jahnavi", "Metro Bikes", "Folding Commuter Bike", 480.0, INR, "The bike never arrived.", "IN_TRANSIT", "unknown", "UPS", "CARRIER_TRACKING", "Tracking stuck at a regional hub for 12 days."),
+            ("Jahnavi", "Bluebell Linens", "Cotton Sheet Set", 88.0, RET, "I sent them back, still waiting on my refund.", "DELIVERED", "yes", "USPS", "RETURN_CARRIER_TRACKING", "Return delivered to the seller 8 days ago."),
+            ("Jahnavi", "Gamma Gadgets", "Smart Watch", 205.0, SNAD, "The watch has no GPS, which the listing promised.", "DELIVERED", "yes", "FedEx", "PRODUCT_PHOTO", "Spec sheet in the box lists no GPS."),
+            ("Jahnavi", "Pine & Pearl Jewelry", "Silver Pendant Necklace", 134.0, INR, "My necklace never came.", "DELIVERED", "no", "UPS", "GPS_COORDINATES", "Delivery scan is 300 metres from the order address."),
+            ("Jahnavi", "Open Road Luggage", "Carry-On Suitcase", 165.0, SNAD, "A wheel was broken on arrival.", "DELIVERED", "yes", "UPS", "PHOTO_PROOF", "Buyer photo of the broken wheel."),
+            (None, "Aurora Fine Watches", "Automatic Chronograph Watch", 2450.0, INR, "The watch never arrived and it was a big purchase.", "IN_TRANSIT", "unknown", "FedEx", "CARRIER_TRACKING", "Tracking has shown in transit for 14 days."),
+            (None, "Vertex Gaming Rigs", "Gaming Desktop PC", 1899.0, SNAD, "The graphics card is a lower model than the one listed.", "DELIVERED", "yes", "UPS", "PRODUCT_PHOTO", "System report in the buyer's photo shows a lower model."),
+            (None, "Heritage Rugs", "Hand-Knotted Wool Rug", 1320.0, RET, "I returned the rug and was never refunded.", "DELIVERED", "yes", "FedEx", "RETURN_CARRIER_TRACKING", "Return delivered to the seller 10 days ago."),
+            (None, "Summit Cycles", "Carbon Road Bike", 3100.0, INR, "Tracking says delivered, but I never got the bike.", "DELIVERED", "no", "UPS", "GPS_COORDINATES", "Delivery scan is on a different street."),
+            (None, "Lumiere Camera House", "Mirrorless Camera Kit", 1750.0, SNAD, "The camera has a faulty sensor.", "DELIVERED", "yes", "FedEx", "PHOTO_PROOF", "Buyer photos show a dead-pixel pattern."),
+        ]
+        more_buyers = ["Elena Petrova", "Jamal Brooks", "Aiko Mori", "Lucas Ferreira", "Zara Khan", "Owen Gallagher", "Maya Iyer", "Noah Fischer", "Isla Campbell", "Arjun Mehta",
+                       "Leah Rosen", "Carlos Mendes", "Ingrid Larsen", "Hugo Laurent", "Naomi Adler", "Felix Wagner", "Rosa Delgado"]
+        more_cases.append(("Abhinav Chitturi", "Ridgeline Outdoor Gear", "Trekking Pole Set", 175.0, INR, "I never got the trekking poles.", "DELIVERED", "yes", "UPS", "PROOF_OF_DELIVERY_SIGNATURE", "Signed for at the address on the order."))
+        more_buyers.append("Declan Murphy")
+        more_cases.append(("Abhinav Chitturi", "Wren & Willow Home", "Ceramic Table Lamp Pair", 132.0, INR, "My lamps never showed up.", "IN_TRANSIT", "unknown", "UPS", "CARRIER_TRACKING", "Tracking has shown in transit since the order shipped."))
+        more_buyers.append("Priyanka Rao")
+        more_cases.append(("Abhinav Chitturi", "Cobalt Camera Supply", "Tripod and Lens Kit", 205.0, INR, "My kit never arrived. My porch camera shows no carrier.", "DELIVERED", "unknown", "UPS", "CARRIER_TRACKING", "Carrier tracking shows delivered to the front porch on Oct 31."))
+        more_buyers.append("Victor Salazar")
+        more_cases.append(("Jahnavi", "Alder & Finch Home", "Standing Desk Converter", 320.0, RET, "I returned the desk converter weeks ago and was never refunded.", "DELIVERED", "yes", "UPS", "RETURN_CARRIER_TRACKING", "Return tracking shows delivered on 2026-10-28 to 18 Dock Road, Unit 4."))
+        more_buyers.append("Gwen Hartley")
+        more_cases.append(("Abhinav Chitturi", "Orchard & Pine Audio", "Studio Headphones", 198.0, INR, "My headphones never arrived. My porch camera shows no carrier.", "DELIVERED", "unknown", "UPS", "CARRIER_TRACKING", "Carrier tracking shows delivered to the front porch on Oct 31."))
+        more_buyers.append("Leona Marsh")
+        silent_buyer_case, fresh_open_case = "DEMO-DSP-1102", "DEMO-DSP-1103"
+        extra_owner = {}
+        for n, (owner, merchant, item, amount, reason, claim, track, addr, carrier, ev_type, ev_note) in enumerate(more_cases):
+            case_id = f"DEMO-DSP-{1085 + n}"
+            extra_owner[case_id] = owner
+            handle = more_buyers[n].split()[0].lower()
+            cases_def.append({
+                "id": case_id, "buyer": f"{more_buyers[n]} ({handle}_demo)", "merchant": merchant, "item": item, "amount": amount, "reason": reason,
+                "status": "WAITING_FOR_BUYER_RESPONSE" if case_id == silent_buyer_case else "UNDER_REVIEW" if case_id in WRONG_AI_CASES or case_id == LOOKALIKE_CASE else "OPEN", "due_hours": 118 if case_id == fresh_open_case else 20 + (n % 6) * 17, "buyer_claim": claim, "evidence_status": "PARTIAL",
+                "tracking_status": track, "addr_match": addr, "carrier": carrier, "evidence_type": ev_type, "evidence_desc": ev_note,
+            })
+
         for idx, c in enumerate(cases_def):
             txn_id = f"DEMO-TXN-{1043+idx}"
             ord_id = f"DEMO-ORD-{1043+idx}"
@@ -763,6 +929,9 @@ def seed_database(db: Session = None) -> None:
             )
             db.add(audit_evt)
 
+            if c["id"] == silent_buyer_case:
+                _seed_silent_buyer(db, c["id"], now)
+
             # A case that starts out "Ready to decide" must have earned it: both the seller and the buyer were asked and have answered.
             if c["status"] == "UNDER_REVIEW":
                 _seed_answered_requests(db, c["id"], c["reason"], now)
@@ -809,7 +978,7 @@ def seed_database(db: Session = None) -> None:
                     "address_match": "unknown",
                     "merchant_correspondence": False
                 },
-                "outcome": "SETTLED",
+                "outcome": "BUYER_FAVOR",
                 "amount": 450.00,
                 "keywords": "item not received delivered unknown address no signature alex morgan similar"
             },
@@ -925,7 +1094,7 @@ def seed_database(db: Session = None) -> None:
                     "gateway_duplicate_confirmed": True,
                     "settlement_receipt": True
                 },
-                "outcome": "SETTLED",
+                "outcome": "BUYER_FAVOR",
                 "amount": 220.00,
                 "keywords": "duplicate transaction double billing gateway retry"
             },
@@ -939,7 +1108,7 @@ def seed_database(db: Session = None) -> None:
                     "porch_theft_video": True,
                     "insurance_claim": True
                 },
-                "outcome": "SETTLED",
+                "outcome": "MERCHANT_FAVOR",
                 "amount": 395.00,
                 "keywords": "porch pirate carrier delivered police report insurance settlement"
             },
@@ -977,7 +1146,7 @@ def seed_database(db: Session = None) -> None:
                     "untimely_claim": True,
                     "address_match": "yes"
                 },
-                "outcome": "DISMISSED",
+                "outcome": "MERCHANT_FAVOR",
                 "amount": 115.00,
                 "keywords": "untimely claim late dispute submission tracking delivered"
             },
@@ -989,7 +1158,7 @@ def seed_database(db: Session = None) -> None:
                     "minor_defect": True,
                     "partial_refund_negotiated": True
                 },
-                "outcome": "SETTLED",
+                "outcome": "BUYER_FAVOR",
                 "amount": 400.00,
                 "keywords": "partial refund cosmetic defect mutual settlement"
             },
@@ -1002,7 +1171,7 @@ def seed_database(db: Session = None) -> None:
                     "unclaimed_parcel": True,
                     "returned_to_merchant": True
                 },
-                "outcome": "SETTLED",
+                "outcome": "MERCHANT_FAVOR",
                 "amount": 175.00,
                 "keywords": "unclaimed parcel return to sender failed delivery attempts"
             },
@@ -1049,24 +1218,36 @@ def seed_database(db: Session = None) -> None:
             db.add(hist_obj)
 
         db.flush()
-        # High-profile open cases go to the manager (PayPal). The rest are shared between the three investigators, so everyone has work.
+        # The manager doesn't own cases. They assign them, and step in when something is wrong. Big-amount cases start unassigned. The rest are shared between the three investigators, so everyone has work.
         from backend.app.services.high_profile import is_high_profile
         team = ["Abhinav Chitturi", "Susmitha", "Jahnavi"]
         mine = 0
         keep_unassigned = {"DEMO-DSP-1056", "DEMO-DSP-1058", "DEMO-DSP-1063", "DEMO-DSP-1065"}   # new arrivals nobody has taken yet, at different stages of their 5 days
         for case in db.query(Dispute).filter(Dispute.status.notin_(["RESOLVED", "CLOSED"])).order_by(Dispute.id).all():
-            if case.id == "DEMO-DSP-1069":
+            if case.id in extra_owner:
+                case.assigned_to = extra_owner[case.id]
+            elif case.id in susmitha_ids:
+                case.assigned_to = "Susmitha"           # her own set of cases to test on
+            elif case.id == "DEMO-DSP-1069":
                 case.assigned_to = "Abhinav Chitturi"   # a clear seller win, ready for the demo of the end-of-case notices
             elif case.id in keep_unassigned:
                 case.assigned_to = None
             elif is_high_profile(case):
-                case.assigned_to = "PayPal"
+                case.assigned_to = None                 # the manager only assigns cases, so big ones wait for them to hand out
             else:
                 case.assigned_to = team[mine % len(team)]
                 mine += 1
 
+        # Cases nobody owns have only just arrived, so the manager still has time to hand them out before they go out at random.
+        fresh = now
+        for n, case in enumerate(db.query(Dispute).filter(Dispute.status.in_(["OPEN"]), Dispute.assigned_to.is_(None)).order_by(Dispute.id).all()):
+            case.created_at = fresh - timedelta(hours=2 + (n % 8) * 2.5)
+            case.response_due_date = case.created_at + timedelta(days=5)
         db.commit()
-        print(f"Successfully seeded database with 28 disputes, 20 historical cases, transactions, shipments, and evidence.")
+        _seed_lookalike_case(db, LOOKALIKE_CASE)
+        for wrong_id in WRONG_AI_CASES:
+            _seed_wrong_ai_case(db, wrong_id)   # needs the accounts, so it runs last
+        print(f"Successfully seeded database with 65 disputes, 20 historical cases, transactions, shipments, and evidence.")
 
     except Exception as e:
         db.rollback()
@@ -1083,13 +1264,27 @@ if __name__ == "__main__":
 # Bump when the meaning of the demo data changes, so databases seeded earlier are refreshed once on startup.
 # v2: cases are seen from PayPal's side (OPEN means nobody has been asked for evidence yet).
 # v3: cases have an owner (assigned_to).
+# v24: a look-alike of the footage case, so the AI can be seen applying what it was taught.
+# v23: unassigned cases have just arrived, so the manager has time before they are given out.
+# v22: evidence that is on file but doesn't hold up (footage from the wrong day) is marked, and the buyer is told why they lost.
+# v21: two hard cases where the AI is wrong (footage from the wrong day, a return delivered to the wrong address). The AI's analysis is saved with its ruling.
+# v20: the reported case is a real disagreement (footage from the wrong day), so the AI still stands by its ruling on a second look.
+# v19: a case the AI got wrong, reported and waiting for the manager to press Train the AI.
+# v18: the manager owns no cases: high-profile ones start unassigned.
+# v17: a brand new open case for Abhinav, with nothing asked yet.
+# v16: one case where the buyer never answered the evidence request, for Abhinav.
+# v15: past cases end as the buyer's or the seller's favor only, never settled or dismissed.
+# v14: six open cases each for Abhinav and Jahnavi, five high-profile ones for the manager.
+# v13: all fifteen of Susmitha's cases start Open.
+# v12: fifteen more cases, all assigned to Susmitha for her own testing.
+# v11: the new seller-win case uses the catalog's signature type, so the AI sees its evidence.
 # v9: cases seeded as Ready to decide now have a real conversation behind them (both sides answered).
 # v8: fifteen more cases (subscriptions, counterfeits, tickets, services, partial shipments), some still unassigned.
 # v7: every case has a 5-day window and the score rises with the clock.
 # v6: high-profile means price only, so who owns what is worked out again.
 # v5: three investigators and a manager (PayPal); high-profile cases go to the manager.
 # v4: decisions go to the AI reviewer (PENDING_AI_REVIEW), with strikes, alerts and appeals.
-SEED_VERSION = "10"
+SEED_VERSION = "24"
 
 
 def ensure_seed_current(db: Session) -> str:

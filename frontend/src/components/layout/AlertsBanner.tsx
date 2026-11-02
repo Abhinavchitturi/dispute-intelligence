@@ -32,7 +32,7 @@ export function AlertsBanner() {
   const alerts = data?.open_alerts ?? [];
   if (!isManager || !alerts.length) return null;
 
-  const where = (a: ManagerAlert) => (a.kind === 'FLAG' ? '/manager' : a.kind === 'REQUEST' ? '/team?tab=requests' : (a.kind === 'APPEAL' || a.kind === 'AI_TAKEOVER' || a.kind === 'AI_OVERTURN') && a.dispute_id ? `/investigate/${a.dispute_id}` : '/team');
+  const where = (a: ManagerAlert) => (a.kind === 'FLAG' ? '/manager?tab=flags' : a.kind === 'REQUEST' ? '/team?tab=requests' : (a.kind === 'APPEAL' || a.kind === 'AI_TAKEOVER' || a.kind === 'AI_OVERTURN') && a.dispute_id ? `/investigate/${a.dispute_id}` : '/team');
   return (
     <section aria-label="Alerts that need you" className="space-y-px border-b border-rose-400/30 bg-rose-500/[.08]">
       {alerts.map((a) => {

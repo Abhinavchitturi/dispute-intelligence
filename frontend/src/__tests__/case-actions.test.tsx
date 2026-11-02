@@ -303,8 +303,7 @@ describe('Case page: take-action popup', () => {
     expect(missing.closest('li')).toHaveAttribute('data-status', 'MISSING');
     expect(within(evidence).getByText('2 items missing')).toBeInTheDocument();
 
-    // The facts panel is a summary, not a verdict.
-    expect(await screen.findByLabelText('How the evidence stacks up')).toBeInTheDocument();
+    expect(screen.queryByLabelText('How the evidence stacks up')).not.toBeInTheDocument(); // no verdict-style summary
     expect(screen.queryByRole('button', { name: /Confirm decision/i })).not.toBeInTheDocument();
 
     const forBuyer = within(dialog).getByRole('button', { name: /^Buyer's favor$/ });
@@ -326,26 +325,6 @@ describe('Case page: take-action popup', () => {
     expect(calls.some((c) => c.url.endsWith('/actions/execute'))).toBe(false); // nobody is told yet
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByRole('status')).toHaveTextContent('Sent for AI review. Nobody has been told yet.');
-  });
-
-  it('before you decide, shows what points toward each side, says it is not a verdict, and shows nothing like it when asking for evidence', async () => {
-    setup();
-    await openWizard();
-    // Asking for evidence: no balance panel.
-    press(/Next: write message/i);
-    await screen.findByLabelText('Message to send');
-    expect(screen.queryByLabelText('How the evidence stacks up')).not.toBeInTheDocument();
-    press(/Back/i);
-
-    press(/^Ready to decide$/);
-    const panel = await screen.findByLabelText('How the evidence stacks up');
-    expect(within(panel).getByText(/It isn't a verdict\. The call is yours\./)).toBeInTheDocument();
-    expect(within(panel).getByText(/Toward the buyer/)).toHaveTextContent('(2)');
-    expect(within(panel).getByText('Return tracking shows the return arriving at the seller')).toBeInTheDocument();
-    expect(within(panel).getByText('The seller has shown no refund')).toBeInTheDocument();
-    expect(within(panel).getByText(/Toward the seller/)).toHaveTextContent('(0)');
-    expect(within(panel).getByText('Nothing on this side.')).toBeInTheDocument(); // an empty side says so
-    expect(within(panel).getByText('Also on file: Appraisal letter (on file)')).toBeInTheDocument();
   });
 
   it('going back from the decision page returns to asking for evidence', async () => {
@@ -384,7 +363,7 @@ describe('Case page: take-action popup', () => {
     expect(screen.getByLabelText('Investigation progress')).toHaveTextContent('100%');
     // Where the button would be, say why there isn't one. And don't advise on a case that's finished.
     expect(screen.getByText('Decided. No further action.')).toBeInTheDocument();
-    expect(await screen.findByText("Decided in the buyer's favor.", { selector: 'p.font-medium' })).toBeInTheDocument();
+    expect(screen.queryByText('Decision')).not.toBeInTheDocument();   // no separate Decision block: the header and progress already say it
     expect(screen.queryByText('What to do next')).not.toBeInTheDocument();
     expect(screen.queryByText(/Review the evidence on file and make your decision/)).not.toBeInTheDocument();
   });

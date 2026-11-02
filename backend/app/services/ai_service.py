@@ -614,6 +614,39 @@ class AIService:
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     @classmethod
+    def _dismissal_review(cls, proposed_outcome: str, proposed_reason: str) -> AIReviewAssessment:
+        agrees = (proposed_outcome or "").upper() in ("DISMISSED", "DISMISS")
+        reasoning = ("The buyer was asked for evidence and didn't respond before the deadline, so the case is dismissed. "
+                     "The seller's evidence doesn't change that: with no answer from the buyer there is no decision to make for either side.")
+        return AIReviewAssessment(
+            ai_verdict="AGREES" if agrees else "DISAGREES", ai_decision="DISMISS_NO_RESPONSE", reasoning=reasoning,
+            investigator_comparison=("Your decision to dismiss matches the rule: no buyer response means dismissal." if agrees else
+                                     f"Deciding this for a side isn't right: the buyer never responded, so the case should be dismissed, not decided as {proposed_outcome}."),
+            evidence_gaps="The buyer's response to the evidence request is missing.", verdict="AGREE" if agrees else "DISAGREE", agrees=agrees,
+            assessment=reasoning, explanation=reasoning, recommendation="DISMISS_NO_RESPONSE", model="resolveiq-no-response-rule", provider="rule_based",
+        )
+
+    @classmethod
+    def _lesson_review(cls, lesson, proposed_outcome: str, proposed_reason: str, dispute=None) -> AIReviewAssessment:
+        decision = "FULFILL_BUYER" if lesson.correct_outcome == "BUYER_FAVOR" else "FULFILL_SELLER"
+        agrees = cls._normalize_party_outcome(proposed_outcome) == decision
+        # Say what is wrong with THIS case's evidence first, then that it follows the lesson.
+        from backend.app.services import evidence_summary
+        problems = []
+        if dispute is not None:
+            ev = evidence_summary.build(dispute)
+            problems = [f"The {i['label'].lower()} doesn't hold up: {i['concern']}" for side in ("seller", "buyer", "records") for i in ev[side] if i["status"] == "PROVIDED" and i.get("concern")]
+        why = " ".join(problems) if problems else "The evidence here matches a case the AI was corrected on."
+        reasoning = f"{why} This follows what the AI was taught from {lesson.dispute_id}, where the same evidence turned out to be wrong, so the ruling is for {'the buyer' if lesson.correct_outcome == 'BUYER_FAVOR' else 'the seller'}."
+        return AIReviewAssessment(
+            ai_verdict="AGREES" if agrees else "DISAGREES", ai_decision=decision, reasoning=reasoning,
+            investigator_comparison=("Your decision matches the lesson." if agrees else f"Your decision goes against a lesson taught from {lesson.dispute_id}."),
+            key_evidence=KeyEvidence(supporting_evidence=[lesson.summary], contradicting_evidence=problems),
+            evidence_gaps="", verdict="AGREE" if agrees else "DISAGREE", agrees=agrees, assessment=reasoning, explanation=reasoning, recommendation=decision,
+            model="resolveiq-learned-lesson", provider="rule_based", learned_from=lesson.dispute_id, lesson_id=lesson.id,
+        )
+
+    @classmethod
     async def review_decision(
         cls,
         dispute: Dispute,
@@ -625,6 +658,19 @@ class AIService:
         parameters, dates, telemetry, evidence documents, and statements, then compares
         that independent determination against the investigator's proposed outcome.
         """
+        # A buyer who was asked for evidence and never answered means the case is dismissed. That is a rule, not a judgement call,
+        # so it is settled here for every provider: the seller's evidence does not turn it into a seller's-favor decision.
+        from backend.app.services import reopen_service
+        if reopen_service.buyer_went_silent(dispute):
+            return cls._dismissal_review(proposed_outcome, proposed_reason)
+
+        # What it has been taught beats what the rules would say: a manager already told it this kind of case goes the other way.
+        from sqlalchemy.orm import object_session
+        from backend.app.services import lesson_service
+        lesson = lesson_service.match(object_session(dispute), dispute)
+        if lesson:
+            return cls._lesson_review(lesson, proposed_outcome, proposed_reason, dispute)
+
         context = cls.build_case_context(dispute)
         fingerprint = cls._context_fingerprint(context)
         locked_decision = cls._independent_decision_cache.get(fingerprint)
@@ -1123,16 +1169,33 @@ class AIService:
                     )
                     gaps.append("Request signed/photo proof of delivery from seller and supporting evidence from buyer.")
             elif ship_status == "DELIVERED":
-                ai_decision = "INSUFFICIENT_EVIDENCE"
-                confidence = "INCONCLUSIVE"
-                reasoning = (
-                    f"Cannot decide yet: Carrier shows DELIVERED in {destination}, but street-level address match is `unknown` and signature proof is missing, while buyer camera footage is not yet verified on file. "
-                    "Neither side has conclusive proof on the central delivery question yet (Confidence: INCONCLUSIVE)."
-                )
-                contradicting_evidence.append(
-                    f"Postal-zone DELIVERED scan in {destination} lacks street-level address verification or signature against buyer's claim."
-                )
-                gaps.append("Request seller address verification/signature and buyer porch camera footage.")
+                seller_proof = has_type("PROOF_OF_DELIVERY_SIGNATURE", "DELIVERY_PHOTO", "PROOF_OF_DELIVERY", "SIGNED_DELIVERY", "DELIVERY_CONFIRMATION", "ADDRESS_VERIFICATION")
+                footage = find_items("BUYER_CAMERA_FOOTAGE")
+                footage_text = " ".join(str(e.get("description") or "") for e in footage).lower()
+                if footage and not seller_proof:
+                    # The carrier only scanned "delivered" somewhere in the postal zone. The seller has nothing that ties it to the buyer's door,
+                    # while the buyer gave footage of the delivery window. The seller's silence on the central point decides it.
+                    ai_decision = "FULFILL_BUYER"
+                    confidence = "HIGH"
+                    shows = "no carrier visible during the delivery window" if "no carrier" in footage_text else "the delivery window with no matching delivery"
+                    reasoning = (
+                        f"The carrier's DELIVERED scan covers only {destination}, with no street-level address match, and the seller has no signature or address verification to tie it to the buyer. "
+                        f"The buyer's camera footage shows {shows}, and nothing contradicts it (Confidence: HIGH)."
+                    )
+                    contradicting_evidence.append(
+                        f"The DELIVERED scan in {destination} is not backed by a signature or address check, so it doesn't outweigh the buyer's footage."
+                    )
+                else:
+                    ai_decision = "INSUFFICIENT_EVIDENCE"
+                    confidence = "INCONCLUSIVE"
+                    reasoning = (
+                        f"Cannot decide yet: Carrier shows DELIVERED in {destination}, but street-level address match is `unknown` and signature proof is missing, while buyer camera footage is not yet verified on file. "
+                        "Neither side has conclusive proof on the central delivery question yet (Confidence: INCONCLUSIVE)."
+                    )
+                    contradicting_evidence.append(
+                        f"Postal-zone DELIVERED scan in {destination} lacks street-level address verification or signature against buyer's claim."
+                    )
+                    gaps.append("Request seller address verification/signature and buyer porch camera footage.")
             else:
                 ai_decision = "INSUFFICIENT_EVIDENCE"
                 confidence = "INCONCLUSIVE"

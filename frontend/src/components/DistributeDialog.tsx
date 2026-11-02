@@ -26,22 +26,20 @@ export function DistributeDialog({ open, onClose, preselect, perPerson }: { open
   const qc = useQueryClient();
   const plan = useQuery({ queryKey: ['distributionPlan'], queryFn: fetchDistributionPlan, enabled: open });
   const [counts, setCounts] = useState<Record<string, number>>({});
-  const [high, setHigh] = useState(false);
 
-  const waiting = (plan.data?.unassigned ?? 0) + (high ? plan.data?.unassigned_high_profile ?? 0 : 0);
+  const waiting = plan.data?.unassigned ?? 0;
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const people = plan.data?.people ?? [];
 
   // Starting point: nobody gets anything, except when opened for one person who asked.
   useEffect(() => {
     if (!open) return;
-    setHigh(false);
     setCounts({});
   }, [open]);
   useEffect(() => {
     if (open && preselect && perPerson && plan.data) setCounts({ [preselect]: Math.min(perPerson, plan.data.unassigned) });
   }, [open, preselect, perPerson, plan.data]);
-  // Taking the high-profile cases out of the pile can leave fewer than were chosen. Trim the biggest numbers until it fits.
+  // The numbers chosen can add up to more than is waiting. Trim the biggest until it fits.
   useEffect(() => {
     if (total <= waiting) return;
     const next = { ...counts };
@@ -54,7 +52,7 @@ export function DistributeDialog({ open, onClose, preselect, perPerson }: { open
   }, [total, waiting, counts]);
 
   const give = useMutation({
-    mutationFn: () => distributeCases({ counts, include_high_profile: high }),
+    mutationFn: () => distributeCases({ counts }),
     onSuccess: (r) => {
       const parts = Object.entries(r.assigned).filter(([, n]) => n > 0).map(([name, n]) => `${name} ${n}`);
       toast(r.total ? 'success' : 'info', r.total ? `Handed out ${r.total} case${r.total === 1 ? '' : 's'}: ${parts.join(', ')}.` : 'There were no cases to hand out.');
@@ -78,7 +76,7 @@ export function DistributeDialog({ open, onClose, preselect, perPerson }: { open
         <>
           <p className="text-sm text-slate-300" role="status">
             <span className="font-semibold text-white">{waiting} case{waiting === 1 ? '' : 's'}</span> {waiting === 1 ? 'is' : 'are'} waiting for an owner.
-            {!high && plan.data.unassigned_high_profile > 0 && <span className="text-muted"> {plan.data.unassigned_high_profile} high-profile {plan.data.unassigned_high_profile === 1 ? 'case is' : 'cases are'} kept for you.</span>}
+            {plan.data.unassigned_high_profile > 0 && <span className="text-muted"> {plan.data.unassigned_high_profile} {plan.data.unassigned_high_profile === 1 ? 'is' : 'are'} high profile.</span>}
           </p>
 
           <div className="flex items-center justify-between gap-3">
@@ -104,11 +102,6 @@ export function DistributeDialog({ open, onClose, preselect, perPerson }: { open
               );
             })}
           </ul>
-
-          <label className="flex cursor-pointer items-center gap-3 text-sm text-slate-200">
-            <input type="checkbox" checked={high} onChange={(e) => setHigh(e.target.checked)} className="h-4 w-4 accent-[#0A84FF]" />
-            Include high-profile cases (normally you keep those)
-          </label>
 
           <p className="rounded-xl bg-white/[.04] px-3.5 py-2.5 text-[13px] text-slate-300" aria-live="polite">
             {!waiting ? 'Nothing to hand out.' : !total ? 'Press plus next to a name, or split them evenly.'

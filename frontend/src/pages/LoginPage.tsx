@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Loader2, ShieldCheck } from 'lucide-react';
 import { login } from '../api/client';
+import { useNavigate } from 'react-router-dom';
 import { saveSession } from '../lib/auth';
 import { Button, Field, Input } from '../components/ui/kit';
 
@@ -10,11 +11,13 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const navigate = useNavigate();
 
   const submit = async (u: string, p: string) => {
     setBusy(true); setError('');
     try {
       saveSession(await login(u, p));
+      navigate('/', { replace: true });   // signing in always starts at the Overview, wherever the last person left off
     } catch (e) {
       setError((e as Error).message);
     } finally {

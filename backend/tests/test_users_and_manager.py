@@ -178,13 +178,14 @@ def test_the_threshold_is_a_setting(monkeypatch):
     assert {c["id"] for c in hp} == {i for i, v in after.items() if v}
 
 
-def test_open_high_profile_cases_are_assigned_to_the_manager_and_the_rest_are_shared():
+def test_the_manager_owns_no_cases_and_the_rest_are_shared():
     cases = [c for c in client.get("/api/disputes", headers=MGR(), params={"limit": 100}).json() if c["status"] not in ("RESOLVED", "CLOSED")]
-    assert all(c["assigned_to"] == "PayPal" for c in cases if c["is_high_profile"])
-    others = {c["assigned_to"] for c in cases if not c["is_high_profile"] and c["assigned_to"]}
+    assert not any(c["assigned_to"] == "PayPal" for c in cases)                       # the manager assigns cases, they don't hold them
+    assert any(c["is_high_profile"] and c["assigned_to"] is None for c in cases)      # big ones start unassigned, for the manager to hand out
+    others = {c["assigned_to"] for c in cases if c["assigned_to"]}
     assert others <= {"Abhinav Chitturi", "Susmitha", "Jahnavi"} and len(others) >= 2  # shared out, not all on one person
     waiting = [c for c in cases if not c["assigned_to"]]
-    assert len(waiting) >= 3 and not any(c["is_high_profile"] for c in waiting)        # a few new arrivals are left for the manager to hand out
+    assert len(waiting) >= 3                                                           # new arrivals wait for the manager to hand out
     summary = client.get("/api/dashboard/summary", headers=MGR()).json()
     assert summary["high_profile_count"] == len([c for c in cases if c["is_high_profile"]])
 
@@ -201,4 +202,4 @@ def test_a_managers_decision_is_final_at_once_with_no_ai_review():
     assert {m["counterparty"] for m in notices} == {"SELLER", "BUYER"} and "The carrier never confirmed" in notices[0]["body"]
     assert any("Decision on dispute" in e["subject"] for e in client.get(f"/api/disputes/{did}/emails", headers=MGR()).json())
     # No strike for anyone: the AI never overturned an investigator.
-    assert all(t["strikes"] == 0 for t in client.get("/api/team", headers=MGR()).json())
+    assert not any(h["dispute_id"] == did for t in client.get("/api/team", headers=MGR()).json() for h in t["history"])

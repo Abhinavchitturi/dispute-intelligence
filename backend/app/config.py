@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # Every case has this long to be dealt with. The priority score climbs as the deadline closes in, and a case nobody has taken
     # by its deadline is handed to the AI Agent to handle from start to finish.
     CASE_WINDOW_DAYS: int = 5
+    AI_AUTO_REVIEW: bool = True                 # the AI reviewer rules by itself on every decision waiting for review
+    AI_REVIEW_DELAY_SECONDS: int = 30           # the AI rules the moment a decision is sent. This is only how long the background sweep waits before catching one that was missed
+    AUTO_ASSIGN_AFTER_DAYS: float = 1   # a new complaint waits this long for its manager to assign it, then it is given to an investigator at random
+    AUTO_ASSIGN_WHEN_DAYS_LEFT: float = 3   # and it never waits once this few days are left, so the investigator isn't squeezed
+    PUBLIC_URL: str = "http://localhost:8000"   # where the "open a new case" link in a dismissal email points
     AI_AGENT_NAME: str = "AI Agent"
 
     # High-profile cases go to the manager: any case for this much money or more. (Price only. A score keeps changing.)

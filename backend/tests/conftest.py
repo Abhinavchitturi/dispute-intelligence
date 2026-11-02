@@ -6,6 +6,7 @@ TEST_DB = "test_resolveiq.db"
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 os.environ["DATABASE_URL"] = f"sqlite:///./{TEST_DB}"
+os.environ["AI_AUTO_REVIEW"] = "false"  # tests that need a decision to wait for review would otherwise be ruled on at once. The ones about the AI turn it on.
 os.environ["AUTH_REQUIRED"] = "false"   # most tests are about cases, not sign-in. test_auth.py turns it back on.
 
 import pytest  # noqa: E402

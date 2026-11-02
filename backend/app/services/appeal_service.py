@@ -1,4 +1,4 @@
-"""When someone is unhappy with a decision and emails the appeals address, a new case opens for a different investigator, with a manager joined."""
+"""When the buyer is unhappy with a decision and emails the appeals address, a new case opens for a different investigator, with a manager joined."""
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -46,9 +46,11 @@ def open_appeal(db: Session, original: Dispute, from_address: str, body: str, su
     if original.status not in CLOSED or original.outcome not in ("BUYER_FAVOR", "SELLER_FAVOR"):
         raise AppealError("Only a decided case can be appealed.")
     sender = (from_address or "").strip().lower()
-    party = cat.BUYER if sender == email_service.buyer_address(original).lower() else cat.SELLER if sender == email_service.seller_address(original).lower() else None
-    if party is None:
-        raise AppealError("That email address isn't the buyer or the seller on this case, so no appeal was opened.")
+    if sender == email_service.seller_address(original).lower():
+        raise AppealError("Only the buyer can ask for further investigation, so no appeal was opened.")
+    if sender != email_service.buyer_address(original).lower():
+        raise AppealError("That email address isn't the buyer on this case, so no appeal was opened.")
+    party = cat.BUYER
     siblings = db.query(Dispute).filter(Dispute.parent_dispute_id == original.id).all()
     if any(s.status in OPEN_STATUSES for s in siblings):
         raise AppealError("An appeal on this case is already open.")

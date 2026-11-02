@@ -34,7 +34,7 @@ def preview(db: Session = Depends(get_db), user: Optional[User] = Depends(manage
     from backend.app.services.message_service import OPEN_STATUSES
     base = db.query(Dispute).filter(Dispute.status.in_(OPEN_STATUSES), Dispute.assigned_to.is_(None))
     return {
-        "unassigned": base.filter(~high_profile_filter()).count(),
+        "unassigned": base.count(),   # everything waiting, big amounts included: the manager hands out all of it
         "unassigned_high_profile": base.filter(high_profile_filter()).count(),
         "people": [{"id": u.id, "name": u.display_name, "open_cases": svc.open_cases(db, u.display_name),
                     "requested": bool(db.query(CaseRequest).filter(CaseRequest.user_id == u.id, CaseRequest.status == "OPEN").first())}

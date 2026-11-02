@@ -22,11 +22,11 @@ export function ClaimPoints({ points, className }: { points?: ClaimPoint[]; clas
                 type="button" aria-expanded={on} onClick={() => setOpen(on ? null : p.key)}
                 className={cn(
                   'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] font-medium ring-1 ring-inset transition',
-                  p.on_file ? 'bg-emerald-400/10 text-emerald-300 ring-emerald-400/25 hover:bg-emerald-400/15' : 'bg-red-500/10 text-red-300 ring-red-500/30 hover:bg-red-500/15',
+                  p.on_file && p.concern ? 'bg-amber-400/10 text-amber-300 ring-amber-400/30 hover:bg-amber-400/15' : p.on_file ? 'bg-emerald-400/10 text-emerald-300 ring-emerald-400/25 hover:bg-emerald-400/15' : 'bg-red-500/10 text-red-300 ring-red-500/30 hover:bg-red-500/15',
                   on && 'ring-2',
                 )}
               >
-                {p.on_file ? <CheckCircle2 aria-hidden className="h-3.5 w-3.5" /> : <AlertCircle aria-hidden className="h-3.5 w-3.5" />}
+                {p.on_file && !p.concern ? <CheckCircle2 aria-hidden className="h-3.5 w-3.5" /> : <AlertCircle aria-hidden className="h-3.5 w-3.5" />}
                 {p.label}
               </button>
             </li>

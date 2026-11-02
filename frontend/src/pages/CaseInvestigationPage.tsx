@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, ArrowLeft, ArrowUpRight, Building2, CheckCircle2, ChevronDown, ChevronRight, CreditCard, FileText, Gavel, History,
-  Handshake, Lightbulb, MessageSquare, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
+  Lightbulb, MessageSquare, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
 } from 'lucide-react';
 import { fetchCaseEmails, fetchDisputeDetail, fetchDisputeMessages, fetchDisputeTimeline, fetchInvestigationBrief, fetchSimilarCasesForDispute } from '../api/client';
 import { ActionWizard, ActionResult } from '../components/ActionWizard';
@@ -60,7 +60,7 @@ export function CaseInvestigationPage() {
 
   useEffect(() => setLastCase(disputeId), [disputeId]); // the Investigation link returns here
 
-  const dispute = useQuery({ queryKey: ['disputeDetail', disputeId], queryFn: () => fetchDisputeDetail(disputeId) });
+  const dispute = useQuery({ queryKey: ['disputeDetail', disputeId], queryFn: () => fetchDisputeDetail(disputeId), refetchInterval: (q) => (q.state.data?.status === 'PENDING_AI_REVIEW' ? 10_000 : false) });
   const timeline = useQuery({ queryKey: ['disputeTimeline', disputeId], queryFn: () => fetchDisputeTimeline(disputeId) });
   const brief = useQuery({ queryKey: ['investigationBrief', disputeId], queryFn: () => fetchInvestigationBrief(disputeId, false) });
   const messages = useQuery({ queryKey: ['disputeMessages', disputeId], queryFn: () => fetchDisputeMessages(disputeId), refetchInterval: 30_000 });
@@ -96,7 +96,6 @@ export function CaseInvestigationPage() {
   const decided = isClosed(d.status);
   const withAdmin = d.status === 'PENDING_AI_REVIEW';
   const judged = d.outcome === 'BUYER_FAVOR' || d.outcome === 'SELLER_FAVOR';
-  const oneSideSettled = !decided && !!d.seller_settled_at !== !!d.buyer_settled_at;
   const mine = d.assigned_to === user.name;
   const startAction = () => setWizardOpen(true);
   const b = brief.data;
@@ -166,13 +165,6 @@ export function CaseInvestigationPage() {
         <ClaimPoints points={d.claim_points} className="mt-3" />
       </Card>
 
-      {oneSideSettled && (
-        <div role="status" className="flex items-start gap-3 rounded-2xl border border-sky-400/25 bg-sky-400/[.07] p-4 text-sm text-sky-100">
-          <Handshake aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
-          <span><span className="font-medium">The {d.seller_settled_at ? 'seller' : 'buyer'} says this was settled outside PayPal.</span> It is not settled until the {d.seller_settled_at ? 'buyer' : 'seller'} confirms too, so the case continues.</span>
-        </div>
-      )}
-
       {!decided && !withAdmin && d.review_note && d.status === 'UNDER_REVIEW' && !isManager && (
         <div role="note" className="rounded-2xl border border-amber-400/25 bg-amber-400/[.07] p-4 text-sm text-amber-100">
           <span className="font-medium">{d.reviewed_by ?? 'An admin'} sent this case back:</span> {d.review_note}
@@ -227,23 +219,6 @@ export function CaseInvestigationPage() {
                 <ErrorState message="Couldn't build the case summary." onRetry={() => brief.refetch()} />
               ) : (
                 <>
-                  {decided && (
-                    <Card className="p-6">
-                      <SectionTitle title="Decision" />
-                      <div className="flex gap-3 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4">
-                        <Gavel className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
-                        <div>
-                          <p className="font-medium text-white">{outcomeMeta(d.outcome) ? (judged ? `Decided in the ${outcomeMeta(d.outcome)!.label.toLowerCase()}.` : `${outcomeText(d.outcome)}.`) : 'This case is closed.'}</p>
-                          {d.outcome === 'SETTLED' && <p className="mt-1 text-sm text-muted">The seller and the buyer both confirmed they settled it outside PayPal. No decision was made.</p>}
-                          {d.outcome === 'DISMISSED' && <p className="mt-1 text-sm text-muted">The buyer withdrew the claim. No refund was issued and no decision was made.</p>}
-                          {judged && d.proposed_reason && <p className="mt-1 text-sm text-slate-300"><span className="text-muted">Reason: </span>{d.proposed_reason}</p>}
-                          {isManager && judged && <div className="mt-3"><ReviseDecision dispute={d} /></div>}
-                          <p className="mt-1 text-sm text-muted">There's nothing left to do on this case. To take action, open a case that's New, waiting on replies, or ready to decide from All disputes.</p>
-                        </div>
-                      </div>
-                    </Card>
-                  )}
-
                   {!decided && (
                   <Card className="p-6">
                     <SectionTitle

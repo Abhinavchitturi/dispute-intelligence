@@ -15,6 +15,8 @@ from backend.app.services.auth_service import actor_name, case_scope, case_user,
 from backend.app.services.claim_service import extract as extract_claims
 from backend.app.services.decision_service import DecisionError, DecisionService
 from backend.app.services.draft_service import DraftService
+from backend.app.services import lesson_service, reopen_service
+from backend.app.services.ai_service import AIService
 from backend.app.services.message_service import PENDING_REVIEW
 from backend.app.services.strike_service import StrikeService
 
@@ -117,6 +119,30 @@ def unblock(user_id: str, request: SortRequest, user: Optional[User] = Depends(m
     return {"success": True, "user_id": target.id, "is_blocked": False}
 
 
+@router.get("/disputes/{dispute_id}/ai-ruling")
+def ai_ruling(dispute_id: str, user: Optional[User] = Depends(current_user), db: Session = Depends(get_db)):
+    """The analysis the AI based its ruling on, as it was when the ruling was made. Managers read it when an investigator disputes the ruling."""
+    if user and user.role != MANAGER:
+        raise HTTPException(status_code=403, detail="Only managers read the AI's full analysis.")
+    _dispute(db, dispute_id)
+    review = db.query(AIReview).filter(AIReview.dispute_id == dispute_id).order_by(AIReview.created_at.desc()).first()
+    if not review or not review.assessment_json:
+        return {"available": False}
+    import json
+    return {"available": True, "assessment": json.loads(review.assessment_json), "verdict": review.verdict, "proposed_outcome": review.proposed_outcome,
+            "ai_outcome": review.ai_outcome, "model": review.model, "created_at": review.created_at}
+
+
+@router.post("/team/{user_id}/reset-strikes")
+def reset_strikes(user_id: str, request: SortRequest, user: Optional[User] = Depends(manager_user), db: Session = Depends(get_db)):
+    """A manager can reset an investigator's strikes whenever they like."""
+    target = db.get(User, user_id)
+    if not target or target.role != INVESTIGATOR:
+        raise HTTPException(status_code=404, detail="Investigator not found.")
+    n = StrikeService.reset_strikes(db, target, actor_name(user, "manager"), request.note)
+    return {"success": True, "user_id": target.id, "cleared": n, "strikes": StrikeService.active_strikes(db, target.id), "is_blocked": target.is_blocked}
+
+
 # ---------- the AI reviewer's hook (the agent itself is built elsewhere) ----------
 class VerdictRequest(BaseModel):
     verdict: str                      # APPROVE or OVERTURN
@@ -132,6 +158,7 @@ def _case_for_ai(db: Session, d: Dispute) -> dict:
         "claim_points": [p.model_dump() for p in extract_claims(d)], "evidence": evidence_summary.build(d),
         "messages": [{"party": m.counterparty, "direction": m.direction, "subject": m.subject, "body": m.body, "created_at": m.created_at} for m in d.messages],
         "appeal_of": d.parent_dispute_id,
+        "buyer_silent": reopen_service.buyer_went_silent(d),   # the buyer never answered the evidence request: the case is dismissed, not decided for the seller
     }
 
 
@@ -210,6 +237,12 @@ class AIDecision(BaseModel):
 async def ai_decide(dispute_id: str, request: AIDecision, db: Session = Depends(get_db)):
     """The AI Agent decides a case it owns. It is final, tells the seller and the buyer, and a manager can overturn it."""
     d = _owned_case(db, dispute_id)
+    if request.outcome.upper() in ("DISMISSED", "DISMISS"):
+        if not reopen_service.buyer_went_silent(d):
+            raise HTTPException(status_code=400, detail="Only a case where the buyer didn't answer the evidence request can be dismissed.")
+        reopen_service.dismiss_for_silence(db, d)
+        db.commit()
+        return {"success": True, "dispute_id": d.id, "status": d.status, "outcome": d.outcome}
     action_type = "DECIDE_FOR_BUYER" if request.outcome == "BUYER_FAVOR" else "DECIDE_FOR_SELLER"
     draft = await DraftService.generate(d, action_type, None, None)
     body = f"{draft.body}\n\nREVIEW\n- {request.rationale.strip()}"
@@ -232,14 +265,35 @@ async def ai_verdict(dispute_id: str, request: VerdictRequest, db: Session = Dep
     return {"success": True, "dispute_id": d.id, "status": d.status, "outcome": d.outcome, "review_id": review.id}
 
 
+def _lesson_json(l) -> Optional[dict]:
+    import json
+    if not l:
+        return None
+    return {"id": l.id, "summary": l.summary, "evidence_types": json.loads(l.evidence_types), "doubtful_types": json.loads(l.doubtful_types),
+            "times_applied": l.times_applied or 0, "applied_to": json.loads(l.applied_to or "[]"), "created_at": l.created_at}
+
+
 def _feedback(db: Session, only_new: bool) -> List[dict]:
+    """One training example per correction: the case as the AI saw it, what it ruled, and the right answer with the manager's reasons."""
+    import json
     q = db.query(AIReview).filter(AIReview.correct_outcome.isnot(None))
     if only_new:
         q = q.filter(AIReview.exported_at.is_(None))
     rows = q.order_by(AIReview.corrected_at).all()
-    out = [{"review_id": r.id, "dispute_id": r.dispute_id, "model": r.model, "investigator_decision": r.proposed_outcome, "ai_verdict": r.verdict,
+    out = []
+    for r in rows:
+        d = db.query(Dispute).filter(Dispute.id == r.dispute_id).first()
+        ev = evidence_summary.build(d) if d else {"seller": [], "buyer": [], "records": []}
+        out.append({
+            "review_id": r.id, "dispute_id": r.dispute_id, "model": r.model, "investigator_decision": r.proposed_outcome, "ai_verdict": r.verdict,
             "ai_outcome": r.ai_outcome, "ai_rationale": r.rationale, "correct_outcome": r.correct_outcome, "correction_note": r.correction_note,
-            "corrected_by": r.corrected_by, "corrected_at": r.corrected_at, "source": r.correction_source, "already_exported": r.exported_at is not None} for r in rows]
+            "corrected_by": r.corrected_by, "corrected_at": r.corrected_at, "source": r.correction_source, "already_exported": r.exported_at is not None,
+            # What the AI needs to learn from: the facts, the evidence (with anything doubtful marked), the investigator's reasons, and the AI's own analysis.
+            "case": {"reason": d.reason, "amount": d.amount, "currency": d.currency, "buyer_claim": d.buyer_claim, "investigator_reason": d.proposed_reason} if d else None,
+            "evidence": {side: [{"type": i["evidence_type"], "label": i["label"], "status": i["status"], "description": i["description"], "concern": i.get("concern")} for i in ev[side]] for side in ("seller", "buyer", "records")},
+            "ai_analysis": json.loads(r.assessment_json) if r.assessment_json else None,
+            "lesson": _lesson_json(lesson_service.for_review(db, r.id)),
+        })
     return out
 
 
@@ -289,9 +343,6 @@ def revise(dispute_id: str, request: ReviseRequest, user: Optional[User] = Depen
 
 class FlagRequest(BaseModel):
     points: str
-    proposed_outcome: Optional[str] = None
-    proposed_reason: Optional[str] = None
-    ai_rationale: Optional[str] = None
 
 
 @router.post("/disputes/{dispute_id}/flag")
@@ -301,15 +352,24 @@ async def flag(dispute_id: str, request: FlagRequest, user: Optional[User] = Dep
         raise HTTPException(status_code=403, detail="Investigators flag decisions. Managers resolve the flags.")
     d = _dispute(db, dispute_id)
     try:
-        if (d.status != "RESOLVED" or d.ai_verdict != "OVERTURN") and request.proposed_outcome in ("BUYER_FAVOR", "SELLER_FAVOR"):
-            if d.status != "PENDING_AI_REVIEW":
-                DecisionService.propose(db, d, user, actor_name(user, "investigator"), request.proposed_outcome, request.proposed_reason or request.points)
-            opposite = "SELLER_FAVOR" if request.proposed_outcome == "BUYER_FAVOR" else "BUYER_FAVOR"
-            await _apply_verdict(db, d, VerdictRequest(verdict="OVERTURN", outcome=opposite, rationale=request.ai_rationale or "AI Reviewer overturned the investigator's proposed decision."), "ai-reviewer")
         f = DecisionService.raise_flag(db, d, user, actor_name(user, "investigator"), request.points)
+        # A second look first. If the AI now agrees with the investigator, it made the mistake itself: no need to bother a manager.
+        auto_closed = False
+        if d.proposed_outcome in ("BUYER_FAVOR", "SELLER_FAVOR"):
+            second = await AIService.review_decision(d, d.proposed_outcome, d.proposed_reason or "")
+            if second.ai_verdict == "AGREES":
+                note = f"On a second look the AI agrees with the investigator, so its first ruling was a mistake. {second.reasoning or second.explanation or ''}".strip()
+                DecisionService.resolve_flag(db, f, d, settings.AI_AGENT_NAME, "OVERTURN", note)
+                d.decided_by = "INVESTIGATOR"
+                raiser = db.get(User, f.raised_by)
+                for m in StrikeService.managers(db):
+                    StrikeService.notify(db, m.id, "AI_SELF_CORRECTED", f"The AI corrected itself on {d.id}",
+                                         f"{raiser.display_name if raiser else 'An investigator'} reported the AI's ruling. On a second look the AI agreed with them, so the case was closed in their favor and the strike removed.", d.id)
+                db.commit()
+                auto_closed = True
     except DecisionError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"success": True, "flag_id": f.id}
+    return {"success": True, "flag_id": f.id, "auto_closed": auto_closed}
 
 
 def _flag(db: Session, f: Flag) -> dict:
@@ -317,7 +377,7 @@ def _flag(db: Session, f: Flag) -> dict:
     who = db.get(User, f.raised_by)
     return {"id": f.id, "dispute_id": f.dispute_id, "raised_by": who.display_name if who else f.raised_by, "points": f.points, "status": f.status,
             "created_at": f.created_at, "due_at": f.due_at, "resolved_by": f.resolved_by, "resolved_at": f.resolved_at, "resolution_note": f.resolution_note,
-            "investigator_outcome": d.proposed_outcome if d else None, "ai_outcome": d.outcome if d else None, "ai_rationale": d.ai_rationale if d else None,
+            "investigator_outcome": d.proposed_outcome if d else None, "investigator_reason": d.proposed_reason if d else None, "ai_outcome": d.outcome if d else None, "ai_rationale": d.ai_rationale if d else None,
             "ai_verdict": d.ai_verdict if d else None}
 
 

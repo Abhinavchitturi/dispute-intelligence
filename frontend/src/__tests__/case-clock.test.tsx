@@ -58,12 +58,12 @@ describe('Unassigned cases lead the manager\'s screen', () => {
     const ids = within(box).getAllByText(/^D-/).map((e) => e.textContent);
     expect(ids).toEqual(['D-HOT', 'D-MID', 'D-CALM']);                                       // the highest score first
     expect(within(box).getAllByRole('combobox')).toHaveLength(3);                          // assign right there
-    expect(box).toHaveTextContent('goes to the AI Agent to handle itself');
+    expect(box).toHaveTextContent('goes to an investigator at random');
     expect(within(box).queryByText('D-OWNED')).not.toBeInTheDocument();                    // it already has an owner
     expect(within(box).queryByText('D-DONE')).not.toBeInTheDocument();                     // and decided cases don't need one
     expect(calls.some((c) => c.includes('unassigned=true'))).toBe(true);
     // It sits above the stat tiles, so it is the first thing the manager sees.
-    const tiles = screen.getByText('High profile').closest('section') as HTMLElement;
+    const tiles = screen.getByLabelText('What needs you') as HTMLElement;
     expect(box.compareDocumentPosition(tiles) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(within(box).getByRole('button', { name: /All 3/ }));
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/queue?view=unassigned'));
@@ -82,7 +82,7 @@ describe('Unassigned cases lead the manager\'s screen', () => {
     expect(screen.queryByLabelText('Nobody owns these yet')).not.toBeInTheDocument();
   });
 
-  it('the Disputes page has an Unassigned tab and a With the AI Agent tab for the manager only', async () => {
+  it('the Disputes page has an Unassigned tab for the manager only (cases never go to the AI Agent for want of an owner)', async () => {
     signInAs('MANAGER'); api();
     const { unmount } = mount(<DisputeQueuePage />, '/queue?view=unassigned');
     expect(await screen.findByText('D-HOT')).toBeInTheDocument();
@@ -90,7 +90,7 @@ describe('Unassigned cases lead the manager\'s screen', () => {
     expect(screen.queryByText('D-OWNED')).not.toBeInTheDocument();
     expect(screen.queryByText('D-AI')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^Unassigned/ })).toHaveTextContent('3');
-    expect(screen.getByRole('tab', { name: /With the AI Agent/ })).toHaveTextContent('1');
+    expect(screen.queryByRole('tab', { name: /With the AI Agent/ })).not.toBeInTheDocument();
     unmount();
     signOut();
     mount(<DisputeQueuePage />, '/queue');
@@ -169,6 +169,6 @@ describe('The AI Agent takes a case nobody took', () => {
     expect(card).not.toHaveTextContent('strike');                                           // there was no investigator to blame
     expect(screen.queryByLabelText('With the AI Agent')).not.toBeInTheDocument();           // it is decided now
     expect(screen.getByRole('button', { name: /Overturn decision/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Question the AI's decision/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Report this/ })).not.toBeInTheDocument();
   });
 });

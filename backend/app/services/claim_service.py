@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from backend.app.models.dispute import Dispute
 from backend.app.schemas.dispute import ClaimPoint
 from backend.app.services import evidence_catalog as cat
+from backend.app.services.evidence_checks import concern_for
 
 # key -> (label, words that trigger it, evidence that would back it up, who has it, note when it is on file, note when it is not)
 _RULES: List[Dict] = [
@@ -82,10 +83,13 @@ def extract(dispute: Dispute) -> List[ClaimPoint]:
         if not m:
             continue
         have = _on_file(dispute, rule["evidence_type"])
+        concern = next((c for c in (concern_for(dispute, e) for e in dispute.evidence_items if e.evidence_type == rule["evidence_type"] and e.availability_status == "AVAILABLE") if c), None) if have else None
         point = ClaimPoint(
             key=rule["key"], label=rule["label"], quote=_quote(claim, m), note=rule["on"] if have else rule["off"],
-            on_file=have, evidence_type=rule["evidence_type"], party=rule["party"],
+            on_file=have, evidence_type=rule["evidence_type"], party=rule["party"], concern=concern,
         )
+        if concern:
+            point.note = f"The buyer mentioned this and it is on file, but it has a problem. {concern}"
         if point.label not in seen_labels:
             seen_labels.add(point.label)
             points.append(point)

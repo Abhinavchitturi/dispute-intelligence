@@ -66,6 +66,8 @@ def test_every_case_the_demo_starts_as_ready_to_decide_has_earned_it():
     ready = [d for d in client.get("/api/disputes", params={"limit": 200}).json() if d["status"] == "UNDER_REVIEW"]
     assert ready
     for d in ready:
+        if _dispute(d["id"]).get("buyer_silent"):
+            continue   # the buyer's last day passed with no answer, so nothing more is coming: the investigator can dismiss it
         msgs = _messages(d["id"])
         asked = {m["counterparty"] for m in msgs if m["direction"] == "OUTBOUND" and m["action_type"] in ("REQUEST_SELLER_EVIDENCE", "REQUEST_BUYER_EVIDENCE")}
         answered = {m["counterparty"] for m in msgs if m["direction"] == "INBOUND"}
@@ -179,7 +181,11 @@ def test_a_decision_resolves_the_case_and_tells_both_parties(did, action, outcom
 
     notices = [m for m in _messages(did) if m["action_type"] == action]
     assert sorted(m["counterparty"] for m in notices) == ["BUYER", "SELLER"]  # one notice to each side
-    assert all(f"Resolved in the {winner}'s favor" in m["body"] and not m["awaiting_reply"] for m in notices)
+    assert all(not m["awaiting_reply"] for m in notices)
+    for m in notices:
+        # A buyer who lost is told in terms of the seller's proof, with a way to ask for a closer look. Everyone else gets the usual notice.
+        said = "decided in the seller's favor" if (winner == "seller" and m["counterparty"] == "BUYER") else f"Resolved in the {winner}'s favor"
+        assert said in m["body"]
 
     # The open request no longer waits for anything, and the thread shows the case as closed.
     assert not any(m["awaiting_reply"] for m in _messages(did))
@@ -290,7 +296,7 @@ def test_ready_to_decide_needs_both_sides_to_have_answered():
     assert client.get("/api/dashboard/summary").json()["awaiting_review_count"] >= 1
 
 
-def test_when_time_is_up_the_case_is_ready_to_decide_even_if_only_one_side_answered():
+def test_a_buyer_who_stays_silent_past_the_deadline_can_have_the_case_dismissed():
     from backend.app.database import SessionLocal
     from backend.app.models.message import DisputeMessage
     from backend.app.services.message_service import MessageService
@@ -311,7 +317,13 @@ def test_when_time_is_up_the_case_is_ready_to_decide_even_if_only_one_side_answe
         MessageService.expire_overdue(db)
     finally:
         db.close()
-    assert _dispute(did)["status"] == "UNDER_REVIEW"                   # the buyer never answered, but the deadline has passed
+    d = _dispute(did)                                                  # the buyer never answered in time: the investigator can now dismiss it
+    assert d["buyer_silent"] and d["status"] == "UNDER_REVIEW"
+    assert client.post(f"/api/disputes/{did}/dismiss-no-response").status_code == 200
+    d = _dispute(did)
+    assert d["status"] == "CLOSED" and d["outcome"] == "DISMISSED"
+    note = next(m for m in _messages(did) if m["action_type"] == "DISPUTE_DISMISSED" and m["counterparty"] == "BUYER")
+    assert "Since you didn't respond, the case is dismissed" in note["body"] and "/api/public/new-case/" in note["body"]
 
 
 def test_seller_notice_is_short_and_buyer_notice_carries_the_appeal_paragraph():
@@ -320,3 +332,43 @@ def test_seller_notice_is_short_and_buyer_notice_carries_the_appeal_paragraph():
     short = short_notice(full)
     assert "Resolved in the seller's favor." in short and "WHAT HAPPENS NEXT" in short and "REVIEW" in short
     assert "WHAT WE REVIEWED" not in short and "REASON" not in short
+
+
+def test_the_buyer_can_open_a_new_case_from_the_link_and_only_once():
+    did = "DEMO-DSP-1057"
+    note = next(m for m in _messages(did) if m["action_type"] == "DISPUTE_DISMISSED" and m["counterparty"] == "BUYER")
+    link = note["body"].split(": ", 1)[1].strip().split("\n")[0]
+    path = link[link.index("/api/"):]
+    assert client.get("/api/public/new-case/not-a-real-token").status_code == 404
+    r = client.get(path)
+    assert r.status_code == 200 and f"{did}-R1" in r.text
+    assert _dispute(f"{did}-R1")["status"] == "OPEN" and _dispute(f"{did}-R1")["parent_dispute_id"] == did
+    assert client.get(path).status_code == 400                       # already used
+
+
+def test_the_dismiss_button_only_works_after_the_buyers_last_day_and_the_ai_agrees():
+    did = "DEMO-DSP-1102"
+    assert _dispute(did)["assigned_to"] == "Abhinav Chitturi"
+    # The AI will not call this a seller win: the buyer never answered, so the case is a dismissal.
+    r = client.post(f"/api/disputes/{did}/ai-review", json={"proposed_outcome": "SELLER_FAVOR", "proposed_reason": "The seller sent signed carrier tracking."})
+    assert r.json()["ai_verdict"] == "DISAGREES" and r.json()["ai_decision"] == "DISMISS_NO_RESPONSE"
+    assert client.post(f"/api/disputes/{did}/ai-review", json={"proposed_outcome": "DISMISSED", "proposed_reason": "The buyer never answered."}).json()["ai_verdict"] == "AGREES"
+    client.get("/api/dashboard/summary")                                 # the deadline passes: nothing is dismissed on its own
+    d = _dispute(did)
+    assert d["buyer_silent"] and d["status"] not in ("CLOSED", "RESOLVED")
+    r = client.post(f"/api/disputes/{did}/dismiss-no-response")
+    assert r.status_code == 200 and r.json()["ai_verdict"] == "AGREES"
+    d = _dispute(did)
+    assert d["status"] == "CLOSED" and d["outcome"] == "DISMISSED" and not d["buyer_silent"]
+    assert client.post(f"/api/disputes/{did}/dismiss-no-response").status_code == 400    # already closed
+    from backend.app.database import SessionLocal
+    from backend.app.models.audit import AuditEvent
+    db = SessionLocal()
+    try:
+        assert db.query(AuditEvent).filter(AuditEvent.dispute_id == did, AuditEvent.action == "AI_REVIEW").count() == 1
+    finally:
+        db.close()
+
+
+def test_a_case_whose_buyer_still_has_time_cannot_be_dismissed():
+    assert client.post("/api/disputes/DEMO-DSP-1085/dismiss-no-response").status_code == 400

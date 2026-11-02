@@ -109,16 +109,13 @@ describe('ActionWizard AI Review in Decision Popup', () => {
     // Click AI Review
     fireEvent.click(aiReviewBtn);
 
-    // AI Assessment card is displayed inside the popup
-    await waitFor(() => {
-      expect(screen.getByText('1. AI Verdict:')).toBeInTheDocument();
-    });
-    expect(screen.getByText('DISAGREES')).toBeInTheDocument();
-    expect(screen.getByText('FULFILL_BUYER')).toBeInTheDocument();
+    // The assessment reads as plain words: what the AI thinks, why, and what it relied on.
+    expect(await screen.findByText("The AI sees it differently: the buyer's favor.")).toBeInTheDocument();
     expect(screen.getByText('Carrier coordinates do not match the order address.')).toBeInTheDocument();
-    expect(screen.getByText(/4\. Key Evidence:/i)).toBeInTheDocument();
     expect(screen.getByText('Carrier telemetry records mismatch in delivery address coordinates.')).toBeInTheDocument();
-    expect(screen.getByText(/5\. Investigator Decision Comparison:/i)).toBeInTheDocument();
-    expect(screen.getByText(/6\. Evidence Gaps:/i)).toBeInTheDocument();
+    expect(screen.getByText(/On your reasoning/i)).toBeInTheDocument();
+    expect(screen.getByText(/Still missing/i)).toBeInTheDocument();
+    // Reporting comes later, once the AI has actually overturned a sent decision.
+    expect(screen.queryByRole('button', { name: /Report this/i })).not.toBeInTheDocument();
   });
 });

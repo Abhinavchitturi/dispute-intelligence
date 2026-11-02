@@ -29,7 +29,7 @@ def _open(**params):
 
 
 def _regular():
-    return [d for d in _open() if not d["is_high_profile"]]
+    return _open()   # the manager owns no cases, so big ones are handed out like any other
 
 
 def _release_all():
@@ -69,7 +69,7 @@ def test_the_manager_assigns_one_case_to_a_person_who_is_told():
     assert client.post(f"/api/disputes/{case}/assign", headers=MGR(), json={"assignee": "Nobody Here"}).status_code == 400
 
 
-def test_unassigned_cases_are_shared_out_evenly_and_the_managers_own_are_left_alone():
+def test_unassigned_cases_are_shared_out_evenly_big_ones_included():
     _release_all()
     unassigned = _regular()
     plan = client.get("/api/cases/distribution", headers=MGR()).json()
@@ -78,10 +78,9 @@ def test_unassigned_cases_are_shared_out_evenly_and_the_managers_own_are_left_al
     assert r["total"] == len(unassigned) and r["left_unassigned"] == 0 and r["people"] == 3
     counts = list(r["assigned"].values())
     assert sum(counts) == len(unassigned) and max(counts) - min(counts) <= 1   # level: 10, 10, 10 for thirty
-    # High-profile cases were not handed out. They wait for the manager.
-    left = [d for d in _open() if d["assigned_to"] is None]
-    assert left and all(d["is_high_profile"] for d in left)
-    assert client.get("/api/dashboard/summary", headers=MGR()).json()["unassigned_count"] == len(left)
+    # Nothing is kept back for the manager: big cases are handed out too.
+    assert not [d for d in _open() if d["assigned_to"] is None]
+    assert client.get("/api/dashboard/summary", headers=MGR()).json()["unassigned_count"] == 0
 
 
 def test_highest_priority_goes_out_first_and_each_person_is_told_how_many():
@@ -89,7 +88,7 @@ def test_highest_priority_goes_out_first_and_each_person_is_told_how_many():
     r = client.post("/api/cases/distribute", headers=MGR(), json={"per_person": 1}).json()
     assert all(n == 1 for n in r["assigned"].values()) and r["total"] == 3
     given = [d for d in _open() if d["assigned_to"] in TEAM]
-    waiting = [d for d in _open() if d["assigned_to"] is None and not d["is_high_profile"]]
+    waiting = [d for d in _open() if d["assigned_to"] is None]
     assert waiting and min(d["priority_score"] for d in given) >= max(d["priority_score"] for d in waiting)  # the urgent ones went first
     assert r["left_unassigned"] == len(waiting)
     note = next(n for n in client.get("/api/notifications", headers=SUS()).json()["items"] if n["kind"] == "ASSIGNED")

@@ -93,6 +93,7 @@ class AIReview(Base):
     corrected_at = Column(DateTime, nullable=True)
     correction_source = Column(String(16), nullable=True)     # MANAGER_REVIEW or INVESTIGATOR_FLAG
     exported_at = Column(DateTime, nullable=True)             # when the AI team pulled it
+    assessment_json = Column(Text, nullable=True)             # the full analysis behind the ruling, saved when it was made so a manager sees what the AI saw
 
 
 class Flag(Base):
@@ -152,3 +153,23 @@ class CaseCollaborator(Base):
     user_id = Column(String(64), ForeignKey("users.id"), nullable=False, index=True)
     added_by = Column(String(128), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AILesson(Base):
+    """Something the AI was taught by a correction: cases that look like this one are ruled this way. The built-in reviewer applies it to new cases."""
+    __tablename__ = "ai_lessons"
+
+    id = Column(String(64), primary_key=True)
+    review_id = Column(String(64), nullable=False, index=True)
+    dispute_id = Column(String(64), nullable=False, index=True)
+    reason = Column(String(64), nullable=False)               # the kind of dispute
+    evidence_types = Column(Text, nullable=False)             # JSON list: what was on file, so a new case can be compared with it
+    doubtful_types = Column(Text, nullable=False)             # JSON list: evidence on file that didn't hold up
+    wrong_outcome = Column(String(32), nullable=False)        # what the AI ruled
+    correct_outcome = Column(String(32), nullable=False)      # what was right
+    summary = Column(Text, nullable=False)                    # the lesson, in a sentence a manager can read
+    taught_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    times_applied = Column(Integer, default=0)
+    applied_to = Column(Text, nullable=True)                  # JSON list of the cases where the AI used it
+    active = Column(Boolean, default=True)

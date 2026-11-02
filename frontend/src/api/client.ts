@@ -39,7 +39,7 @@ export interface KeyEvidence {
 
 export interface AIReviewAssessment {
   ai_verdict: 'AGREES' | 'DISAGREES' | 'INCONCLUSIVE';
-  ai_decision: 'FULFILL_BUYER' | 'FULFILL_SELLER' | 'INSUFFICIENT_EVIDENCE';
+  ai_decision: 'FULFILL_BUYER' | 'FULFILL_SELLER' | 'INSUFFICIENT_EVIDENCE' | 'DISMISS_NO_RESPONSE';
   reasoning: string;
   key_evidence: KeyEvidence;
   investigator_comparison: string;
@@ -301,7 +301,7 @@ export function assignDispute(disputeId: string, assignee: string | null) {
   return post<{ assigned_to: string | null }>(`/disputes/${disputeId}/assign`, { assignee }, 'Failed to update the owner of this case');
 }
 
-export function declareFromParty(disputeId: string, party: 'SELLER' | 'BUYER', kind: 'SETTLED' | 'WITHDRAWN') {
+export function declareFromParty(disputeId: string, party: 'SELLER' | 'BUYER', kind: 'WITHDRAWN') {
   return post<DisputeMessage>(`/disputes/${disputeId}/parties/${party}/declare`, { kind }, 'Failed to record that');
 }
 
@@ -338,13 +338,10 @@ export const fetchNotifications = () => get<Notifications>('/notifications', 'Fa
 export const markNotificationsRead = () => post<{ marked_read: number }>('/notifications/read', {}, 'Failed to mark read');
 export const sortAlert = (id: string, note?: string) => post<ManagerAlert>(`/alerts/${id}/sorted`, { note }, 'Failed to mark this sorted');
 export const fetchTeam = () => get<TeamMember[]>('/team', 'Failed to load the team');
+export const resetStrikes = (id: string, note?: string) => post<{ success: boolean; cleared: number }>(`/team/${id}/reset-strikes`, { note }, 'Failed to reset the strikes');
 export const unblockUser = (id: string, note?: string) => post<{ success: boolean }>(`/team/${id}/unblock`, { note }, 'Failed to unblock');
 export const fetchFlags = (status?: string, disputeId?: string) => get<CaseFlag[]>(`/flags?${new URLSearchParams({ ...(status ? { status } : {}), ...(disputeId ? { dispute_id: disputeId } : {}) })}`, 'Failed to load flags');
-export const raiseFlag = (
-  disputeId: string,
-  points: string,
-  extra?: { proposed_outcome?: string; proposed_reason?: string; ai_rationale?: string }
-) => post<{ flag_id: string }>(`/disputes/${disputeId}/flag`, { points, ...extra }, 'Failed to raise the flag');
+export const raiseFlag = (disputeId: string, points: string) => post<{ flag_id: string; auto_closed?: boolean }>(`/disputes/${disputeId}/flag`, { points }, 'Failed to raise the flag');
 export const resolveFlag = (id: string, action: 'UPHOLD_AI' | 'OVERTURN', note: string) => post<CaseFlag>(`/flags/${id}/resolve`, { action, note }, 'Failed to resolve the flag');
 export const reviseDecision = (disputeId: string, outcome: string, note: string) => post<{ outcome: string }>(`/disputes/${disputeId}/revise`, { outcome, note }, 'Failed to overturn the decision');
 export const fetchTraining = () => get<TrainingRow[]>('/ai-training', 'Failed to load the AI feedback');
@@ -391,3 +388,9 @@ export async function unshareCase(disputeId: string, userId: string): Promise<vo
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Failed to take them off the case');
   }
 }
+
+export const dismissNoResponse = (disputeId: string) =>
+  post<{ message: string }>(`/disputes/${disputeId}/dismiss-no-response`, {}, "Couldn't dismiss the case");
+
+export const fetchAiRuling = (disputeId: string) =>
+  get<{ available: boolean; assessment?: AIReviewAssessment }>(`/disputes/${disputeId}/ai-ruling`, "Couldn't load the AI's analysis");
