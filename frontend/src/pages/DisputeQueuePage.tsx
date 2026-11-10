@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowDownUp, ChevronRight, Eye, FilterX, Inbox, RefreshCw } from 'lucide-react';
-import { fetchDisputeDetail, fetchDisputes } from '../api/client';
+import { fetchDisputeDetail, fetchDisputes, syncPayPalDisputes } from '../api/client';
 import { DisputeSummary } from '../types';
-import { Badge, Button, Card, Drawer, EmptyState, ErrorState, KeyValue, Meter, PageHeader, SearchInput, Segmented, Select, Skeleton } from '../components/ui/kit';
+import { Badge, Button, Card, Drawer, EmptyState, ErrorState, KeyValue, Meter, PageHeader, SearchInput, Segmented, Select, Skeleton, useToast } from '../components/ui/kit';
 import { EvidenceBadge, StatusBadge } from '../components/ui/StatusBadges';
 import { DecideBy, Countdown, ScoreRing } from '../components/DisputeBits';
 import { cn, isUrgent, money, OPEN_STATUSES, reasonLabel, timeLeft, WAITING_STATUSES } from '../lib/format';
@@ -37,6 +37,8 @@ function matchesView(d: DisputeSummary, view: View, now: number) {
 
 export function DisputeQueuePage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const toast = useToast();
   const now = useNow();
   const [params, setParams] = useSearchParams();
 
@@ -69,6 +71,19 @@ export function DisputeQueuePage() {
     refetchInterval: 30_000,
     placeholderData: (prev) => prev,
   });
+  const sync = useMutation({
+    mutationFn: syncPayPalDisputes,
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['disputes'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboardSummary'] }),
+      ]);
+      toast('success', result.message);
+    },
+    onError: (syncError) => {
+      toast('error', syncError instanceof Error ? syncError.message : 'Could not sync PayPal disputes.');
+    },
+  });
 
   const counts = useMemo(() => {
     const list = data ?? [];
@@ -92,9 +107,14 @@ export function DisputeQueuePage() {
         title="All Disputes"
         subtitle="Most urgent first. Click a dispute to investigate it, or use the eye for a quick look."
         actions={
-          <Button size="sm" onClick={() => refetch()} aria-label="Refresh disputes">
-            <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} /> Refresh
-          </Button>
+          <>
+            <Button size="sm" onClick={() => sync.mutate()} loading={sync.isPending}>
+              <RefreshCw className="h-4 w-4" /> Sync PayPal
+            </Button>
+            <Button size="sm" onClick={() => refetch()} aria-label="Refresh disputes">
+              <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} /> Refresh
+            </Button>
+          </>
         }
       />
 

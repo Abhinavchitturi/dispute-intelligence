@@ -141,7 +141,7 @@ Important:
 
 ---
 
-## 8. Approve the fake payment as the sandbox buyer
+## 8. Approve the fake payment as the sandbox buyer 
 
 1. Open the approval URL in your browser
 2. Log in with the sandbox personal buyer account
@@ -201,7 +201,8 @@ This confirms the fake payment succeeded.
 Now log in to the sandbox buyer account and open the transaction history or the Resolution Center.
 
 Steps:
-1. Open the PayPal sandbox account
+1. Open the PayPal sandbox account  
+https://www.sandbox.paypal.com/signin
 2. Go to `Activity` or `Transactions`
 3. Find the fake transaction
 4. Click the transaction
@@ -286,7 +287,7 @@ cd "C:\Users\meher\OneDrive\Desktop\resolveiq"
 Get-Content .env | ForEach-Object {
   if ($_ -match "^\s*#|^\s*$") { return }
   $name, $value = $_ -split "=", 2
-  if ($name -and $value) {
+  if ($name -and $value) { 
     [System.Environment]::SetEnvironmentVariable($name.Trim(), $value.Trim(), "Process")
   }
 }
