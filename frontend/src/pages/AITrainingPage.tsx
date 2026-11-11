@@ -94,7 +94,7 @@ export function AITrainingPage() {
       </Card>
       {training.isError ? <ErrorState message="Couldn't load the lessons." onRetry={() => training.refetch()} />
         : training.isLoading ? <Skeleton className="h-64 rounded-2xl" />
-        : !rows.length ? <Card><EmptyState icon={<BrainCircuit className="h-6 w-6" />} title="Nothing taught yet" hint="When you press Train the AI on a case an investigator reported, or overturn an AI ruling, it shows up here as a lesson." /></Card>
+        : !rows.length ? <Card><EmptyState icon={<BrainCircuit className="h-6 w-6" />} title="Nothing taught yet" hint="When you overturn the decision on a case an investigator reported, or overturn an AI ruling, it shows up here as a lesson." /></Card>
         : <ul className="space-y-4" aria-label="Lessons">{rows.map((r) => <li key={r.review_id}><Lesson r={r} /></li>)}</ul>}
       <p className="flex items-center gap-2 text-xs text-muted"><CheckCircle2 aria-hidden className="h-3.5 w-3.5" />The separate AI Agent reads the same lessons from the feedback endpoint. Shared lessons are counted above.</p>
     </>

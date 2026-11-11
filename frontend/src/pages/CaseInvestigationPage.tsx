@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, ArrowLeft, ArrowUpRight, Building2, CheckCircle2, ChevronDown, ChevronRight, CreditCard, FileText, Gavel, History,
-  Lightbulb, MessageSquare, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
+  Lightbulb, MessageSquare, Package, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
 } from 'lucide-react';
 import { fetchCaseEmails, fetchDisputeDetail, fetchDisputeMessages, fetchDisputeTimeline, fetchInvestigationBrief, fetchSimilarCasesForDispute } from '../api/client';
 import { ActionWizard, ActionResult } from '../components/ActionWizard';
@@ -109,8 +109,8 @@ export function CaseInvestigationPage() {
 
       {/* Header */}
       <Card className="p-6">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0 space-y-2">
+        <div className="flex flex-col gap-6 xl:flex-row xl:items-center xl:justify-between">
+          <div className="min-w-0 flex-1 space-y-2">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="font-mono text-2xl font-semibold text-white">{d.id}</h1>
               <StatusBadge status={d.status} />
@@ -131,7 +131,7 @@ export function CaseInvestigationPage() {
             </div>
             {!d.ai_owned && <CollaboratorsPanel dispute={d} />}
           </div>
-          <div className="flex items-center gap-8">
+          <div className="flex flex-wrap items-center gap-8">
             <div>
               <div className="text-xs uppercase tracking-wider text-muted">Amount</div>
               <div className="mt-1 whitespace-nowrap text-2xl font-semibold text-white tabular">{money(d.amount, d.currency)}</div>
@@ -285,7 +285,7 @@ export function CaseInvestigationPage() {
                         {b.structured_findings.map((f) => (
                           <li key={f.finding_id} className="rounded-xl border border-line bg-raised/40 p-4">
                             <div className="flex items-start justify-between gap-3">
-                              <p className="text-sm font-medium text-white">{f.claim}</p>
+                              <p className="min-w-0 text-sm font-medium text-white">{f.claim}</p>
                               <Badge tone={f.verification_status === 'verified' ? 'success' : f.verification_status === 'contradicted' ? 'danger' : 'warn'}>
                                 {f.verification_status === 'verified' && <CheckCircle2 className="h-3 w-3" />}{f.verification_status}
                               </Badge>
@@ -330,23 +330,43 @@ export function CaseInvestigationPage() {
           {tab === 'evidence' && (
             <div className="space-y-4 animate-fade-in">
               <Card className="p-6"><EvidenceChecklist disputeId={disputeId} title="What each side has sent" /></Card>
-              <RecordCard
-                id={d.order?.shipment?.id ?? 'DEMO-SHIP-1042'} highlighted={highlighted}
-                icon={<Truck className="h-4 w-4" />} title="Shipment" badge={<Badge tone="info">{d.order?.shipment?.carrier ?? 'Carrier'}</Badge>}
-              >
-                <KeyValue label="Tracking" mono>{d.order?.shipment?.tracking_reference ?? 'N/A'}</KeyValue>
-                <KeyValue label="Status">{titleCase(d.order?.shipment?.status ?? 'unknown')}</KeyValue>
-                <KeyValue label="Address match">{titleCase(d.order?.shipment?.delivery_address_match ?? 'unknown')}</KeyValue>
-                <KeyValue label="Delivered">{d.order?.shipment?.delivered_at ? parseServerDate(d.order.shipment.delivered_at).toLocaleDateString() : 'Not delivered'}</KeyValue>
-              </RecordCard>
-              <RecordCard
-                id={d.transaction?.id ?? 'DEMO-TXN-1042'} highlighted={highlighted}
-                icon={<CreditCard className="h-4 w-4" />} title="Payment" badge={<Badge tone="success">{titleCase(d.transaction?.status ?? 'completed')}</Badge>}
-              >
-                <KeyValue label="Method">{d.transaction?.payment_method ?? 'PayPal'}</KeyValue>
-                <KeyValue label="Gateway ID" mono>{d.transaction?.external_transaction_id ?? 'N/A'}</KeyValue>
-                <KeyValue label="Buyer account" mono>{d.transaction?.buyer_email_masked ?? '—'}</KeyValue>
-              </RecordCard>
+              {d.order ? (
+                <RecordCard
+                  id={d.order.id} highlighted={highlighted}
+                  icon={<Package className="h-4 w-4" />} title="Order" badge={<Badge tone="neutral">{money(d.order.amount, d.order.currency)}</Badge>}
+                >
+                  <div className="col-span-2"><KeyValue label="Item">{d.order.item_summary}</KeyValue></div>
+                  <KeyValue label="Invoice" mono>{d.order.merchant_reference ?? '—'}</KeyValue>
+                  <KeyValue label="Ordered">{d.order.order_date ? parseServerDate(d.order.order_date).toLocaleDateString() : '—'}</KeyValue>
+                </RecordCard>
+              ) : (
+                <MissingRecord icon={<Package className="h-4 w-4" />} title="Order" text="No order on record for this payment." />
+              )}
+              {d.order?.shipment ? (
+                <RecordCard
+                  id={d.order.shipment.id} highlighted={highlighted}
+                  icon={<Truck className="h-4 w-4" />} title="Shipment" badge={<Badge tone="info">{d.order.shipment.carrier ?? 'Carrier'}</Badge>}
+                >
+                  <KeyValue label="Tracking" mono>{d.order.shipment.tracking_reference ?? 'N/A'}</KeyValue>
+                  <KeyValue label="Status">{titleCase(d.order.shipment.status ?? 'unknown')}</KeyValue>
+                  <KeyValue label="Ship to">{d.order.shipment.shipping_address_masked ?? titleCase(d.order.shipment.delivery_address_match ?? 'unknown')}</KeyValue>
+                  <KeyValue label="Delivered">{d.order.shipment.delivered_at ? parseServerDate(d.order.shipment.delivered_at).toLocaleDateString() : 'Not delivered'}</KeyValue>
+                </RecordCard>
+              ) : (
+                <MissingRecord icon={<Truck className="h-4 w-4" />} title="Shipment" text="No tracking on record. The seller hasn't added any." />
+              )}
+              {d.transaction ? (
+                <RecordCard
+                  id={d.transaction.id} highlighted={highlighted}
+                  icon={<CreditCard className="h-4 w-4" />} title="Payment" badge={<Badge tone="success">{titleCase(d.transaction.status ?? 'completed')}</Badge>}
+                >
+                  <KeyValue label="Method">{d.transaction.payment_method ?? 'PayPal'}</KeyValue>
+                  <KeyValue label="Gateway ID" mono>{d.transaction.external_transaction_id ?? 'N/A'}</KeyValue>
+                  <KeyValue label="Buyer account" mono>{d.transaction.buyer_email_masked ?? '—'}</KeyValue>
+                </RecordCard>
+              ) : (
+                <MissingRecord icon={<CreditCard className="h-4 w-4" />} title="Payment" text="No payment on record for this dispute." />
+              )}
 
               <Card className="p-6">
                 <SectionTitle title={`Documents (${d.evidence_items.length})`} />
@@ -499,6 +519,15 @@ export function CaseInvestigationPage() {
         onDone={(r) => { setLastResult(r); setTab('messages'); }}
       />
     </>
+  );
+}
+
+function MissingRecord({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) {
+  return (
+    <Card className="flex items-center gap-2 p-5 text-sm">
+      <span className="text-muted">{icon}</span><span className="font-semibold text-white">{title}</span>
+      <span className="text-muted">· {text}</span>
+    </Card>
   );
 }
 

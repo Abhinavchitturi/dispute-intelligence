@@ -60,10 +60,20 @@ export const TEXT: Record<Tone, string> = {
 export function Badge({ tone = 'neutral', dot, className, children }: {
   tone?: Tone; dot?: boolean; className?: string; children: React.ReactNode;
 }) {
+  // Text that doesn't fit (a long file name, say) is cut short with an ellipsis instead of spilling out; hover shows all of it.
+  // Neighbouring bits of text ("Score ", 85) stay together in one span, so the label still reads as one piece of text.
+  const parts: React.ReactNode[] = [];
+  for (const c of React.Children.toArray(children)) {
+    const isText = typeof c === 'string' || typeof c === 'number';
+    const last = parts.length - 1;
+    if (isText && last >= 0 && typeof parts[last] === 'string') parts[last] = `${parts[last]}${c}`;
+    else parts.push(isText ? String(c) : c);
+  }
+  const text = parts.filter((c) => typeof c === 'string').join('');
   return (
-    <span className={cn('inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset', TONES[tone], className)}>
-      {dot && <span className={cn('h-1.5 w-1.5 rounded-full', DOT[tone])} />}
-      {children}
+    <span title={text || undefined} className={cn('inline-flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset [&>svg]:shrink-0', TONES[tone], className)}>
+      {dot && <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', DOT[tone])} />}
+      {parts.map((c, i) => (typeof c === 'string' || typeof c === 'number' ? <span key={i} className="min-w-0 truncate">{c}</span> : c))}
     </span>
   );
 }

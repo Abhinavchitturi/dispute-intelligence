@@ -1,307 +1,153 @@
-# PayPal Sandbox Reset Runbook
+# PayPal Sandbox Runbook
 
-This guide gives you the exact step-by-step reset flow for the ResolveIQ PayPal sandbox setup, including the commands to run and the expected output pattern.
+How to get a fresh PayPal sandbox payment, report a problem with it as the buyer, and see the case appear in ResolveIQ.
 
-## 1. Prerequisites
-
-You need:
-- a PayPal Developer account
-- a sandbox business account
-- a sandbox personal buyer account
-- the project checked out locally at `C:\Users\meher\OneDrive\Desktop\resolveiq`
-
-This project is configured to use the PayPal sandbox, as shown in:
-- `.env`
-- `backend/app/config.py`
-- `spike/paypal_spike.py`
+Everything except the report is one command. The report is made by hand, on PayPal, the way a real buyer would.
 
 ---
 
-## 2. Open the PayPal Developer Dashboard
+## Every time: one command
 
-Go to:
+From the project root (macOS / Linux):
 
-https://developer.paypal.com
+```zsh
+.venv/bin/python scripts/paypal_sandbox.py
+```
 
-Then:
-1. Sign in
-2. Open `Dashboard`
-3. Go to `Apps & Credentials`
-4. Create a new sandbox app if needed
-5. Select a sandbox business account for the app
-6. Copy the new `Client ID` and `Client Secret`
+Windows (PowerShell):
+
+```powershell
+.venv\Scripts\python scripts\paypal_sandbox.py
+```
+
+There's no need to load `.env` into the shell first: the script reads it.
+
+### What happens
+
+```text
+✓ Sandbox app keys work, and the app can read disputes.
+✓ Order 1XM77996R0088562A created for $74.06 (Sandbox test item).
+
+→ Approve the payment as the sandbox BUYER (personal account). Click Pay; the script continues on its own.
+  https://www.sandbox.paypal.com/checkoutnow?token=1XM77996R0088562A
+
+✓ Buyer approved.
+✓ Payment captured. Transaction ID: 87A048000C0738526  status: COMPLETED
+
+→ Your turn: report a problem with this payment, as the BUYER, on PayPal.
+  https://www.sandbox.paypal.com/myaccount/summary
+  Under Recent activity, open the -$74.06 payment at the top (to your sandbox business
+  account, e.g. 'Test Store') → Report a problem → fill it in → submit.
+
+… Waiting for the report (up to 30 min, Ctrl-C to stop).
+✓ Dispute PP-R-XXX-12345678 opened: MERCHANDISE_OR_SERVICE_NOT_RECEIVED, status WAITING_FOR_SELLER_RESPONSE.
+  The app will import it as PAYPAL-PP-R-XXX-12345678 within 60s.
+```
+
+1. **Keys check.** It checks the sandbox app's keys, and that the app can read disputes.
+2. **Order.** It creates the order and opens PayPal's approval page in your browser.
+3. **Approval (one click).** Log in as the sandbox **buyer** (personal account) if asked, and click **Pay**. The script notices by itself and captures the payment. You don't copy any IDs.
+4. **Report (manual).** Open https://www.sandbox.paypal.com/myaccount/summary as the buyer. The payment is the top row under **Recent activity**, shown with your business account's name (for example "Test Store"). Open it, choose **Report a problem**, fill it in and submit.
+   - Each run uses a random amount (like $74.06) so you can tell it from older payments. If you report a different payment by mistake, the script says so and keeps waiting. That dispute still reaches the app.
+5. **Confirmation.** The script waits until PayPal has the dispute and prints it.
+6. **ResolveIQ.** With `RESOLVEIQ_MODE=sandbox` in `.env`, the backend pulls new disputes every `PAYPAL_POLL_SECONDS` (default 60), and the case appears in the queue. In demo mode, press **Sync PayPal** on the queue page instead.
+
+PayPal's dispute list can take a few minutes to include a new report, so the poller and the script's "Waiting for the report" step only see it after that. To skip the wait, take the case ID PayPal shows the buyer ("Case ID: PP-R-…") and use **Import case** on the queue page. It reads that one case directly.
+
+A new case always arrives as **New**, whatever PayPal calls it. PayPal shows a fresh inquiry as `UNDER_REVIEW`, which in this app would mean "Ready to decide".
+
+### Skipping the approval click
+
+On the first run the script asks PayPal to save the buyer's PayPal. If PayPal saves it, later runs charge that buyer directly, with no browser at all. This only works when the sandbox app has **Save payment methods** turned on (Developer Dashboard → Apps & Credentials → your app → Features). If it's off, every run asks for the one click, and the script says so.
+
+### New reports in seconds (webhooks)
+
+PayPal's dispute list takes a few minutes to include a new case. To skip that wait, run this in a second terminal and leave it running:
+
+```zsh
+./scripts/paypal_webhook.py
+```
+
+It opens a temporary public HTTPS tunnel to your backend (localhost.run, over `ssh`, nothing to install). It registers that address as the sandbox app's PayPal webhook and saves `PAYPAL_WEBHOOK_ID` to `.env`. From then on PayPal calls ResolveIQ the moment a buyer reports a problem, and the case appears straight away. ResolveIQ only accepts a webhook after PayPal confirms it sent it. Ctrl-C closes the tunnel and unregisters the webhook.
+
+Without it, ResolveIQ still checks PayPal every 10 seconds (`PAYPAL_POLL_SECONDS`), so a case shows up as soon as PayPal lists it. Decisions also reach PayPal within about 10 seconds.
+
+### A meaningful case for a demo
+
+```zsh
+./scripts/paypal_sandbox.py --story not-received       # $289 headphones, USPS says delivered, buyer says it never came
+./scripts/paypal_sandbox.py --story not-as-described   # $329 watch sold as sealed, arrives opened and scratched
+```
+
+A story pays for a real-looking order (item, SKU, invoice number, shipping address). The seller then adds USPS tracking on PayPal and marks it delivered. At the end, the script prints exactly what to choose, write and attach in PayPal's report form. When the case is imported, ResolveIQ reads that order and tracking back from PayPal, so the case page shows the item, invoice, carrier, tracking number and delivery, all from the sandbox.
+
+### When a case is decided
+
+ResolveIQ sends the final decision to PayPal within a minute, or straight away when you press **Sync PayPal**:
+
+- **PayPal's ruling first.** ResolveIQ is PayPal's own investigation desk, so a decision becomes PayPal's ruling on the case (the sandbox's `adjudicate`). PayPal offers that once a claim is under its review. A buyer's inquiry is escalated to a claim first when PayPal allows it.
+- **Buyer's favor, when no ruling is offered:** the buyer is refunded anyway. Either PayPal's own refund is recorded, or the claim is accepted, or the payment is refunded. The buyer sees the refund in their PayPal **Activity**.
+- **Seller's favor, when no ruling is offered:** nothing is sent and no money moves, and the case's activity log says why. Press **Sync PayPal** to try again later.
+
+The buyer's Summary page lists payments and can take a while to update. Look under **Activity** for the refund.
+
+For the not-received story, attach `docs/demo/doorbell-camera-front-door.png`, a front-door camera still showing no delivery that afternoon.
+
+### Options
+
+| Command | What it does |
+|---|---|
+| `scripts/paypal_sandbox.py --amount 120 --item "Wireless headphones"` | A fixed amount and item name (USD), instead of a random amount |
+| `scripts/paypal_sandbox.py --story not-received` | A ready-made demo case (see above) |
+| `scripts/paypal_sandbox.py --tracking 9400… --carrier UPS --delivered` | Your own tracking number and carrier, marked delivered |
+| `scripts/paypal_sandbox.py --no-tracking` | The seller adds no tracking |
+| `scripts/paypal_sandbox.py --no-wait` | Stop after the payment, without waiting for the report |
+| `scripts/paypal_sandbox.py --no-open` | Print the approval link instead of opening the browser |
+| `scripts/paypal_sandbox.py --forget-buyer` | Stop reusing the saved buyer, and approve in the browser again |
+
+The saved buyer is kept in `scripts/.paypal_sandbox_state.json`, which is gitignored.
 
 ---
 
-## 3. Update the local environment file
+## One time only: setup
 
-Open `.env` and replace the existing PayPal values with the new sandbox app values.
+PayPal has no API for these steps, so they're done by hand, once.
 
-Example:
+### 1. Sandbox app (the keys)
+
+1. Sign in at https://developer.paypal.com → **Apps & Credentials** (Sandbox).
+2. Create an app linked to your sandbox **business** account. That account is the seller who gets paid and disputed.
+3. In the app's features, make sure **Disputes** is on. Optionally turn on **Save payment methods** (see above).
+4. Copy the **Client ID** and **Secret** into `.env`:
 
 ```env
 PAYPAL_ENV=sandbox
 PAYPAL_CLIENT_ID=YOUR_SANDBOX_CLIENT_ID
 PAYPAL_CLIENT_SECRET=YOUR_SANDBOX_CLIENT_SECRET
+RESOLVEIQ_MODE=sandbox
 ```
 
-Make sure you are not using production credentials.
+Never use live (production) keys. The script refuses to run against anything but the sandbox.
+
+### 2. Sandbox buyer account
+
+At https://developer.paypal.com/dashboard/accounts → **Create account** → **Personal**, country **United States**, currency **USD**. Keep its email and password: that's who you log in as to approve payments and report problems.
+
+If PayPal says "This seller doesn't accept payments in your currency", the buyer isn't a US/USD account. Orders are made in USD.
 
 ---
 
-## 4. Load environment variables in PowerShell
-
-From the project root, run:
-
-```powershell
-cd "C:\Users\meher\OneDrive\Desktop\resolveiq"
-
-Get-Content .env | ForEach-Object {
-  if ($_ -match "^\s*#|^\s*$") { return }
-  $name, $value = $_ -split "=", 2
-  if ($name -and $value) {
-    [System.Environment]::SetEnvironmentVariable($name.Trim(), $value.Trim(), "Process")
-  }
-}
-```
-
-This loads the variables in the current PowerShell session so the script can read them.
-
----
-
-## 5. Verify the token works
-
-Run:
-
-```powershell
-python .\spike\paypal_spike.py token
-```
-
-### Expected output pattern
-
-```text
-[token] expires_in=32400s
-[token] scopes: https://uri.paypal.com/services/customer/partner-referrals/readwrite https://uri.paypal.com/services/payments/partnerfee https://uri.paypal.com/services/invoicing https://uri.paypal.com/services/checkout/one-click-with-merchant-issued-token https://uri.paypal.com/services/payments/futurepayments https://uri.paypal.com/services/vault/payment-tokens/read https://uri.paypal.com/services/disputes/read
-```
-
-If you see this, the PayPal sandbox app is connected and working.
-
----
-
-## 6. Create a new sandbox buyer account
-
-Go to the PayPal Developer Dashboard:
-
-https://developer.paypal.com/dashboard/accounts
-
-Then:
-1. Click `Create account`
-2. Choose `Personal`
-3. Set the account country to `United States`
-4. Use `USD` as the account currency if available
-5. Save the email and password
-
-This buyer account will be used to approve payment.
-
----
-
-## 7. Create the order
-
-Run:
-
-```powershell
-python .\spike\paypal_spike.py order
-```
-
-### Expected output pattern
-
-The script prints a PayPal approval link.
-
-```text
-POST /v2/checkout/orders -> 201  (PayPal-Debug-Id: ...)
-{
-  "id": "2FG1234567890",
-  "intent": "CAPTURE",
-  "status": "CREATED",
-  "links": [
-    {
-      "rel": "approve",
-      "href": "https://www.sandbox.paypal.com/checkoutnow?...",
-      "method": "GET"
-    }
-  ]
-}
-OPEN AS SANDBOX BUYER (personal account): https://www.sandbox.paypal.com/checkoutnow?...
-```
-
-Important:
-- the order ID is the value in `"id"`, such as `2FG1234567890`
-- do not type angle brackets like `<ORDER_ID>`
-- use the actual value returned by the script
-
----
-
-## 8. Approve the fake payment as the sandbox buyer 
-
-1. Open the approval URL in your browser
-2. Log in with the sandbox personal buyer account
-3. Review the transaction
-4. Click `Pay Now` / `Continue`
-5. Complete the payment
-
-If you see an error like:
-
-> We're sorry. This seller doesn't accept payments in your currency.
-
-Then the buyer account is not compatible with the order currency. Fix by using a US buyer sandbox account with USD, since the app creates orders in USD.
-
----
-
-## 9. Capture the order
-
-After the buyer approves payment, run:
-
-```powershell
-python .\spike\paypal_spike.py capture 2FG1234567890
-```
-
-Use the real order ID from the previous step.
-
-### Expected output pattern
-
-```text
-POST /v2/checkout/orders/2FG1234567890/capture -> 201  (PayPal-Debug-Id: ...)
-{
-  "id": "4R1234567890",
-  "status": "COMPLETED",
-  "payer": {
-    "email_address": "buyer-bizperson@example.com"
-  },
-  "purchase_units": [
-    {
-      "payments": {
-        "captures": [
-          {
-            "id": "4R1234567890",
-            "status": "COMPLETED"
-          }
-        ]
-      }
-    }
-  ]
-}
-```
-
-This confirms the fake payment succeeded.
-
----
-
-## 10. Create a fake dispute as the buyer
-
-Now log in to the sandbox buyer account and open the transaction history or the Resolution Center.
-
-Steps:
-1. Open the PayPal sandbox account  
-https://www.sandbox.paypal.com/signin
-2. Go to `Activity` or `Transactions`
-3. Find the fake transaction
-4. Click the transaction
-5. Select `Report a problem` or `Dispute this transaction`
-6. Choose a dispute reason such as:
-   - `Item not received`
-   - `Merchandise not as described`
-7. Submit the dispute
-
-This creates the sandbox complaint.
-
----
-
-## 11. Check the dispute from the project
-
-Back in the terminal, run:
-
-```powershell
-python .\spike\paypal_spike.py list
-```
-
-### Expected output pattern
-
-```text
-GET /v1/customer/disputes -> 200  (PayPal-Debug-Id: ...)
-{
-  "disputes": [
-    {
-      "id": "PP-1234567890",
-      "status": "OPEN",
-      "reason": "ITEM_NOT_RECEIVED",
-      "disputed_transactions": [
-        {
-          "seller_transaction_id": "4R1234567890"
-        }
-      ]
-    }
-  ],
-  "total_items": 1
-}
-```
-
-You can also inspect one dispute with:
-
-```powershell
-python .\spike\paypal_spike.py show PP-1234567890
-```
-
----
-
-## 12. If a command fails
-
-### Common error: KeyError for PAYPAL_CLIENT_ID
-
-This means env vars are not loaded in the current shell.
-
-Fix with:
-
-```powershell
-Get-Content .env | ForEach-Object {
-  if ($_ -match "^\s*#|^\s*$") { return }
-  $name, $value = $_ -split "=", 2
-  if ($name -and $value) {
-    [System.Environment]::SetEnvironmentVariable($name.Trim(), $value.Trim(), "Process")
-  }
-}
-```
-
-Then rerun:
-
-```powershell
-python .\spike\paypal_spike.py token
-```
-
----
-
-## 13. Summary of the working reset flow
-
-```powershell
-cd "C:\Users\meher\OneDrive\Desktop\resolveiq"
-
-Get-Content .env | ForEach-Object {
-  if ($_ -match "^\s*#|^\s*$") { return }
-  $name, $value = $_ -split "=", 2
-  if ($name -and $value) { 
-    [System.Environment]::SetEnvironmentVariable($name.Trim(), $value.Trim(), "Process")
-  }
-}
-
-python .\spike\paypal_spike.py token
-python .\spike\paypal_spike.py order
-python .\spike\paypal_spike.py capture 2FG1234567890
-python .\spike\paypal_spike.py list
-```
-
-This is the cleanest sandbox reset path for the project.
-
----
-
-## 14. Final note
-
-The project is designed for PayPal sandbox testing, not live PayPal. The fake payment and fake complaint are meant to be created using sandbox buyer accounts only.
+## If something fails
+
+| Message | Fix |
+|---|---|
+| `Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in .env` | Fill in the sandbox app keys (setup step 1). |
+| `PayPal refused the sandbox app's keys` | The keys are wrong, or they are live keys. Copy the Sandbox keys again. |
+| `The sandbox app can't read disputes` | Turn on the Disputes feature for the app. |
+| `Nobody approved the payment within 600s` | Run the script again: each run makes a new order. |
+| `No dispute for this payment yet` | PayPal can be slow. Check with `python spike/paypal_spike.py list`, or press Sync PayPal in the app. |
+| The case doesn't appear in ResolveIQ | Check `RESOLVEIQ_MODE=sandbox` in `.env` and restart the backend. The log should say `Polling PayPal sandbox for new disputes every 60s.` |
+
+For raw API responses while debugging, `spike/paypal_spike.py` still prints every call in full (`token`, `list`, `show <DISPUTE_ID>`).
+
+The project is for PayPal sandbox testing only. Payments and complaints are made with sandbox accounts.

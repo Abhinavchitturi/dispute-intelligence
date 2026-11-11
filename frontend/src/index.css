@@ -14,6 +14,9 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+    /* Buyers and sellers type what they like, including one very long "word". Wrap it instead of spilling out of its box.
+       (break-word, not anywhere: "anywhere" also lets flexible boxes shrink to one letter wide, which squeezed the case title.) */
+    overflow-wrap: break-word;
   }
   code, pre { font-family: "SF Mono", ui-monospace, Menlo, monospace; }
   /* A clear, high-contrast focus ring for keyboard users, as on Apple platforms. */

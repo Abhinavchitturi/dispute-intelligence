@@ -128,7 +128,9 @@ export function AppShell() {
           </button>
 
           <div className="ml-auto flex items-center gap-3">
-            <Badge tone="violet">Demo data</Badge>
+            {health?.mode === 'sandbox'
+              ? <Badge tone="info">PayPal sandbox</Badge>
+              : <Badge tone="violet">Demo data</Badge>}
             <Badge tone={online ? 'success' : 'danger'} dot>{online ? 'Live' : 'Offline'}</Badge>
             <NotificationBell />
             <div className="flex items-center gap-3 border-l border-line pl-4">

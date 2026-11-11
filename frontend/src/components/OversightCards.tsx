@@ -82,17 +82,17 @@ export function OversightCards({ dispute: d }: { dispute: DisputeDetail }) {
       )}
 
       {d.conflict_due_at && (
-        <Card className="space-y-4 border-amber-400/30 p-5" aria-label="Reopened by the manager">
+        <Card className="space-y-4 border-amber-400/30 p-5" aria-label="Reported to the manager">
           <div className="flex items-start gap-3">
             <Flag aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
             <p className="min-w-0 flex-1 text-sm text-slate-200">
-              <span className="font-medium text-white">Reopened by the manager. </span>
-              {d.conflict_by ?? 'An investigator'} disagrees with the AI's decision. A manager has to settle it and close it by {new Date(d.conflict_due_at).toLocaleDateString()}.
+              <span className="font-medium text-white">Reported to the manager. </span>
+              {d.conflict_by ?? 'An investigator'} disagrees with the AI's decision. The case stays closed: a manager reviews it by {new Date(d.conflict_due_at).toLocaleDateString()} and either overturns the decision or keeps it.
             </p>
           </div>
           {isManager && myFlag && myFlag.status === 'OPEN' && (
             <div className="rounded-xl border border-amber-400/25 bg-amber-400/[.06] p-4">
-              <p className="mb-2.5 text-[13px] text-slate-200">Read both sides and the AI's analysis below, check the evidence further down, then settle it. <span className="text-muted">Train the AI rules for {d.conflict_by ?? 'the investigator'}. Keep the AI decision leaves the AI's ruling as it is.</span></p>
+              <p className="mb-2.5 text-[13px] text-slate-200">Read both sides and the AI's analysis below, and check the evidence further down. The case isn't reopened: nothing else can change on it. <span className="text-muted">Overturn decision rules for {d.conflict_by ?? 'the investigator'}. Keep the AI decision leaves the AI's ruling as it is.</span></p>
               <FlagActions flag={myFlag} />
             </div>
           )}
@@ -142,7 +142,7 @@ export function OversightCards({ dispute: d }: { dispute: DisputeDetail }) {
           {d.ai_rationale && <p className="mt-2 text-sm text-slate-300">{d.ai_rationale}</p>}
           {overturned && (
             <p className="mt-2 text-[13px] text-muted">
-              {isManager ? 'The investigator received a strike. If the AI was wrong, overturn it below and the strike comes off.' : result && d.decided_by !== 'MANAGER' ? 'This counted as a strike. The AI overturned your decision. If you disagree, report it with your reasons. A manager reopens the case and settles it within 1 to 2 days.' : 'A manager changed this decision.'}
+              {isManager ? 'The investigator received a strike. If the AI was wrong, overturn it below and the strike comes off.' : result && d.decided_by !== 'MANAGER' ? 'This counted as a strike. The AI overturned your decision. If you disagree, report it with your reasons. The case stays closed; a manager reviews it within 1 to 2 days and can overturn the decision.' : 'A manager changed this decision.'}
             </p>
           )}
 

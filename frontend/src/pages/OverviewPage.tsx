@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, CheckCircle2, Clock, FolderOpen, Bot, Gavel, Hourglass, UserPlus, RefreshCw, ShieldAlert, ShieldCheck, Star, XCircle } from 'lucide-react';
-import { fetchCaseRequests, fetchDashboardSummary, fetchDisputes, fetchMe, fetchNotifications, requestCases } from '../api/client';
+import { fetchCaseRequests, fetchDashboardSummary, fetchDisputes, fetchHealth, fetchMe, fetchNotifications, requestCases } from '../api/client';
 import { Badge, Button, Card, CountUp, EmptyState, ErrorState, Meter, PageHeader, SectionTitle, Skeleton, Textarea, useToast } from '../components/ui/kit';
 import { DistributeDialog } from '../components/DistributeDialog';
 import { AssignSelect } from '../components/AssignSelect';
@@ -45,6 +45,7 @@ function Kpi({ label, value, hint, icon, tone, onClick }: {
 
 export function OverviewPage() {
   const navigate = useNavigate();
+  const { data: health } = useQuery({ queryKey: ['health'], queryFn: fetchHealth, retry: 0 });  // sandbox mode has no demo case
   const now = useNow(10_000);
   const { user, isManager } = useCurrentUser();
   const toast = useToast();
@@ -103,7 +104,7 @@ export function OverviewPage() {
             </Button>
             {isManager && <Button size="sm" onClick={() => setDistributing(true)}>Distribute cases</Button>}
             <Button size="sm" onClick={() => navigate('/queue')}>{isManager ? 'View all cases' : 'View your cases'}</Button>
-            <Button size="sm" variant="primary" onClick={() => navigate('/investigate/DEMO-DSP-1042')}>Open demo case</Button>
+            {health?.mode !== 'sandbox' && <Button size="sm" variant="primary" onClick={() => navigate('/investigate/DEMO-DSP-1042')}>Open demo case</Button>}
           </>
         }
       />

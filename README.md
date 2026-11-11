@@ -67,6 +67,13 @@ set -a; source .env; set +a
 
 In the PayPal developer dashboard, create a sandbox app linked to the business account and enable the **Disputes** feature.
 
+### A fresh sandbox payment to dispute
+One command creates and captures a sandbox payment, then waits while you report a problem with it on PayPal as the buyer. See [docs/paypal-sandbox-reset-runbook.md](docs/paypal-sandbox-reset-runbook.md).
+
+```bash
+.venv/bin/python scripts/paypal_sandbox.py
+```
+
 ### Sandbox spike
 Follow [spike/README.md](spike/README.md). It walks through getting a token, creating an order, opening a dispute, listing and fetching it, and adding tracking.
 

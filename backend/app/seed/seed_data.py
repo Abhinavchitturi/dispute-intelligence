@@ -4,10 +4,10 @@ from sqlalchemy.orm import Session
 from backend.app.database import SessionLocal, engine, Base
 from backend.app.models.dispute import Dispute, Transaction, Order, Shipment
 from backend.app.models.evidence import Evidence
-from backend.app.models.brief import HistoricalCase
+from backend.app.models.brief import HistoricalCase, InvestigationBrief
 from backend.app.models.audit import AuditEvent
 from backend.app.models.message import DisputeMessage
-from backend.app.models.team import AIReview, CaseCollaborator, CaseRequest, Email, Flag, ManagerAlert, Notification, Strike, User
+from backend.app.models.team import AILesson, AIReview, CaseCollaborator, CaseRequest, Email, Flag, ManagerAlert, Notification, Strike, User
 from backend.app.services.priority_service import calculate_priority_score
 
 def _seed_answered_requests(db: Session, dispute_id: str, reason: str, now: datetime) -> None:
@@ -1299,3 +1299,43 @@ def ensure_seed_current(db: Session) -> str:
     db.merge(AppMeta(key="seed_version", value=SEED_VERSION))
     db.commit()
     return "seeded" if empty else "refreshed"
+
+
+def has_demo_data(db: Session) -> bool:
+    return db.query(Dispute.id).filter(Dispute.source == "synthetic").first() is not None
+
+
+def clear_demo_data(db: Session) -> dict:
+    """Removes every demo case and everything that hangs off it, so the app holds only real PayPal sandbox cases.
+
+    Accounts stay (unblocked). PayPal cases, and records about them, are kept. Oversight records that aren't about a PayPal
+    case (alerts, strikes, notifications and the like) were made by the demo, so they go too. Returns rows removed per table.
+    """
+    from backend.app.models.meta import AppMeta
+
+    keep = [row[0] for row in db.query(Dispute.id).filter(Dispute.source != "synthetic").all()]
+    removed: dict = {}
+
+    def gone(name, query):
+        removed[name] = query.delete(synchronize_session=False)
+
+    def not_paypal(model):
+        column = model.dispute_id
+        return db.query(model).filter(column.is_(None) | column.notin_(keep)) if keep else db.query(model)
+
+    for name, model in (("emails", Email), ("notifications", Notification), ("case_flags", Flag), ("ai_reviews", AIReview),
+                        ("strikes", Strike), ("manager_alerts", ManagerAlert), ("case_collaborators", CaseCollaborator),
+                        ("investigation_briefs", InvestigationBrief), ("ai_lessons", AILesson), ("dispute_messages", DisputeMessage)):
+        gone(name, not_paypal(model))
+    gone("case_requests", db.query(CaseRequest))
+    gone("evidence", db.query(Evidence).filter(Evidence.source == "synthetic"))
+    gone("audit_events", db.query(AuditEvent).filter(AuditEvent.source == "synthetic"))
+    gone("disputes", db.query(Dispute).filter(Dispute.source == "synthetic"))
+    gone("shipments", db.query(Shipment).filter(Shipment.source == "synthetic"))
+    gone("orders", db.query(Order).filter(Order.source == "synthetic"))
+    gone("transactions", db.query(Transaction).filter(Transaction.source == "synthetic"))
+    gone("historical_cases", db.query(HistoricalCase).filter(HistoricalCase.source == "synthetic"))
+    db.query(User).update({"is_blocked": False, "blocked_at": None, "blocked_reason": None})
+    db.query(AppMeta).filter(AppMeta.key == "seed_version").delete()  # switching back to demo mode seeds afresh
+    db.commit()
+    return {k: v for k, v in removed.items() if v}

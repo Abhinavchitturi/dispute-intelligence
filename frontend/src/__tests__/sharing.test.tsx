@@ -46,7 +46,7 @@ describe('An investigator sees only their own cases', () => {
     mount(<DisputeQueuePage />, '/queue');
     await screen.findByText('D-OWN');
     expect(screen.getByText(/Shared with Susmitha, Jahnavi/)).toBeInTheDocument();
-    expect(screen.getByText('Owner: Susmitha')).toBeInTheDocument();                 // a case shared with you still says who owns it
+    expect(screen.getByText('Susmitha')).toBeInTheDocument();                        // a case shared with you still says who owns it
   });
 
   it('the manager\'s own list includes cases shared with them', async () => {

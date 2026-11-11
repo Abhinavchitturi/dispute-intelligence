@@ -254,7 +254,7 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
     expect(screen.queryByRole('button', { name: /Report this/ })).not.toBeInTheDocument();
   });
 
-  it('a manager settles a conflict on the case: both sides of it, the AI\'s analysis, then Train the AI', async () => {
+  it('a manager settles a conflict on the case: both sides of it, the AI\'s analysis, then Overturn decision', async () => {
     signInAs('MANAGER');
     const flag = { id: 'F1', dispute_id: 'D-1', status: 'OPEN', raised_by: 'Abhinav Chitturi', points: 'The signature is on file and the AI ignored it.', due_at: '2099-01-01T00:00:00', investigator_outcome: 'SELLER_FAVOR' };
     api(base({ conflict_due_at: '2099-01-01T00:00:00', conflict_by: 'Abhinav Chitturi' }), { flags: [flag] });
@@ -265,13 +265,13 @@ describe('Case: the AI reviewer, flags, emails and appeals', () => {
       return inner(url, init);
     }) as any;
     page();
-    const card = await screen.findByLabelText('Reopened by the manager');
+    const card = await screen.findByLabelText('Reported to the manager');
     expect(within(card).getByText('What the AI said')).toBeInTheDocument();
     expect(within(card).getByText(/What Abhinav Chitturi says/)).toBeInTheDocument();
     expect(await within(card).findByText(/The signature is on file and the AI ignored it\./)).toBeInTheDocument();
     expect(await within(card).findByText('The AI disagrees with Abhinav Chitturi: it points to the buyer\'s favor.')).toBeInTheDocument();
     expect(within(card).getByText('No carrier visible')).toBeInTheDocument();
-    fireEvent.click(within(card).getByRole('button', { name: /Train the AI/ }));
+    fireEvent.click(within(card).getByRole('button', { name: /Overturn decision/ }));
     await waitFor(() => expect(calls.some((c) => c.url.endsWith('/flags/F1/resolve'))).toBe(true));
     expect(calls.find((c) => c.url.endsWith('/resolve'))!.body.action).toBe('OVERTURN');
   });

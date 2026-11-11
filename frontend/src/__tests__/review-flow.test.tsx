@@ -115,7 +115,7 @@ describe('Manager review', () => {
     const card = await screen.findByLabelText('Flag on D-7');
     expect(within(card).getByText(/decided in seller's favor/)).toBeInTheDocument();
     expect(within(card).getByRole('button', { name: /Open case details/ })).toBeInTheDocument();
-    expect(within(card).queryByRole('button', { name: /Train the AI/ })).not.toBeInTheDocument();    // the decision is made on the case itself
+    expect(within(card).queryByRole('button', { name: /Overturn decision/ })).not.toBeInTheDocument();    // the decision is made on the case itself
     expect(within(card).queryByRole('button', { name: /Keep the AI decision/ })).not.toBeInTheDocument();
   });
 
@@ -187,7 +187,7 @@ describe('Your cases and Ready to decide', () => {
     await waitFor(() => expect(tab).toHaveTextContent('1'));
     fireEvent.click(tab);
     expect(await screen.findByText('D-DONE')).toBeInTheDocument();
-    expect(screen.queryByText('D-MINE')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('D-MINE')).not.toBeInTheDocument());   // the table drops rows a moment later
   });
 
   it('"Your cases" lists every case that is yours, including ones you already decided', async () => {
@@ -215,7 +215,7 @@ describe('Your cases and Ready to decide', () => {
     api();
     mount(<DisputeQueuePage />, '/queue');
     await screen.findByText('D-FREE');
-    expect(screen.getByText('Owner: Someone Else')).toBeInTheDocument();
+    expect(screen.getByText('Someone Else')).toBeInTheDocument();                       // in the Owner column
     expect(screen.getAllByText('Yours').length).toBeGreaterThan(0);
     expect(screen.getByText('Unassigned')).toBeInTheDocument();
     // The manager hands cases out. An investigator asks, they don't pick.

@@ -103,7 +103,8 @@ describe('Unassigned cases lead the manager\'s screen', () => {
     signInAs('MANAGER'); api();
     mount(<DisputeQueuePage />, '/queue?view=ai');
     expect(await screen.findByText('D-AI')).toBeInTheDocument();
-    expect(screen.getByText('With the AI Agent. Nobody took it in time.')).toBeInTheDocument();
+    expect(screen.getByText('AI Agent')).toBeInTheDocument();
+    expect(screen.getByText('Nobody took it in time.')).toBeInTheDocument();
     expect(screen.queryByText('D-HOT')).not.toBeInTheDocument();
   });
 });

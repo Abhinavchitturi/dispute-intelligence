@@ -178,6 +178,15 @@ export async function syncPayPalDisputes(): Promise<{ created: number; updated: 
   return payload;
 }
 
+export async function importPayPalCase(caseId: string): Promise<{ dispute_id: string; created: boolean; new_messages: number; new_evidence: number; message: string }> {
+  const res = await fetch(`${API_BASE}/integrations/paypal/import/${encodeURIComponent(caseId)}`, { method: 'POST' });
+  const payload = await res.json();
+  if (!res.ok) {
+    throw new Error(payload.detail || `Failed to import PayPal case: ${res.statusText}`);
+  }
+  return payload;
+}
+
 export async function testAIConnectivity(): Promise<any> {
   const res = await fetch(`${API_BASE}/integrations/ai/test`, { method: 'POST' });
   return res.json();

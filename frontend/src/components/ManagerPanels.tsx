@@ -155,9 +155,9 @@ export function FlagActions({ flag }: { flag: CaseFlag }) {
     </div>
   ) : (
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" variant="primary" loading={resolve.isPending} onClick={() => resolve.mutate('OVERTURN')}><Bot className="h-3.5 w-3.5" />Train the AI</Button>
+      <Button size="sm" variant="primary" loading={resolve.isPending} onClick={() => resolve.mutate('OVERTURN')}><RotateCcw className="h-3.5 w-3.5" />Overturn decision</Button>
       <Button size="sm" onClick={() => setAsking(true)}>Keep the AI decision</Button>
-      <span className="text-xs text-muted">Train the AI if the investigator is right: the decision is corrected, the strike comes off and the AI learns from it.</span>
+      <span className="text-xs text-muted">Overturn if the investigator is right: the decision changes to theirs, both sides are told, the strike comes off and the AI learns from it.</span>
     </div>
   );
 }

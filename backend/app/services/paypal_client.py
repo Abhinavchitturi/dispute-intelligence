@@ -85,18 +85,49 @@ class PayPalClient:
             return False, f"Unexpected error during connection test: {str(e)}", 500
 
     @classmethod
-    async def get_disputes(cls, page_size: int = 100) -> Dict[str, Any]:
-        """Lists disputes from PayPal Sandbox API."""
+    async def get_disputes(cls, page_size: int = 50, max_pages: int = 20) -> Dict[str, Any]:
+        """Lists disputes from PayPal Sandbox API, following PayPal's "next" links. PayPal refuses a page_size over 50."""
         token = await cls.get_access_token()
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-        url = f"{settings.PAYPAL_BASE_URL}/v1/customer/disputes"
+        url: Optional[str] = f"{settings.PAYPAL_BASE_URL}/v1/customer/disputes"
+        params: Optional[Dict[str, Any]] = {"page_size": min(page_size, 50)}
+        items: list = []
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(url, headers=headers, params={"page_size": page_size})
+            for _ in range(max_pages):
+                resp = await client.get(url, headers=headers, params=params)
+                resp.raise_for_status()
+                page = resp.json()
+                if not isinstance(page, dict) or not isinstance(page.get("items", []), list):
+                    return page
+                items.extend(page.get("items", []))
+                nxt = next((l.get("href") for l in page.get("links", []) if isinstance(l, dict) and l.get("rel") == "next"), None)
+                # Only follow a next link that points back at the configured PayPal host.
+                if not nxt or not str(nxt).startswith(settings.PAYPAL_BASE_URL):
+                    break
+                url, params = nxt, None  # the next link already carries the page token
+        return {"items": items}
+
+    @classmethod
+    async def get_json(cls, path: str) -> Dict[str, Any]:
+        """GET any sandbox REST path (a capture, an order, a tracker) and return its JSON."""
+        token = await cls.get_access_token()
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(f"{settings.PAYPAL_BASE_URL}{path}", headers={"Authorization": f"Bearer {token}"})
             resp.raise_for_status()
             return resp.json()
+
+    @classmethod
+    async def post_json(cls, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """POST to any sandbox REST path. Returns the JSON body, or {} when PayPal answers with an empty one."""
+        token = await cls.get_access_token()
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            resp = await client.post(f"{settings.PAYPAL_BASE_URL}{path}", json=body,
+                                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            resp.raise_for_status()
+            return resp.json() if resp.text else {}
 
     @classmethod
     async def get_dispute_details(cls, external_dispute_id: str) -> Dict[str, Any]:

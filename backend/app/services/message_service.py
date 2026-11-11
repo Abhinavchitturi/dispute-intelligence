@@ -106,8 +106,9 @@ class MessageService:
             body=(body or "").strip() or f"{label}. No message text was provided.",
             source="paypal_sandbox" if sandbox else "synthetic",
             awaiting_reply=True,
-            # Only the demo simulates answers. A real party would reply through PayPal itself.
-            reply_due_at=None if sandbox else now + timedelta(seconds=max(0, settings.DEMO_REPLY_DELAY_SECONDS)),
+            # The demo always simulates the answer. Sandbox cases do too unless SIMULATE_REPLIES is off: their seller and buyer
+            # are test accounts that never really reply.
+            reply_due_at=now + timedelta(seconds=max(0, settings.DEMO_REPLY_DELAY_SECONDS)) if (not sandbox or settings.SIMULATE_REPLIES) else None,
             is_read=True, audit_event_id=audit_event_id,
             meta_json=json.dumps({"requested_evidence": requested_evidence, "deadline": (now + timedelta(days=deadline_days)).isoformat()}),
             created_at=now,
@@ -162,7 +163,7 @@ class MessageService:
             existing.submitted_at, existing.source, existing.metadata_json = now, "synthetic", meta
             return existing
         ev = Evidence(
-            id=f"DEMO-EVID-{dispute.id}-{evidence_type}-{uuid.uuid4().hex[:6]}", dispute_id=dispute.id, evidence_type=evidence_type,
+            id=f"{'DEMO-' if dispute.source == 'synthetic' else ''}EVID-{dispute.id}-{evidence_type}-{uuid.uuid4().hex[:6]}", dispute_id=dispute.id, evidence_type=evidence_type,
             description=description, source="synthetic", submitted_at=now, availability_status="AVAILABLE", metadata_json=meta,
         )
         db.add(ev)
@@ -280,7 +281,7 @@ class MessageService:
         AuditService.record_event(
             db=db, dispute_id=dispute.id, actor=f"{PARTY_NAME[party]}_simulator", action="REPLY_RECEIVED", status="SUCCESS",
             source="synthetic", request_reference=outbound.id,
-            result_summary=f"[DEMO MODE] Simulated reply from the {PARTY_NAME[party]}: {sent} of {len(outbound.requested_evidence)} requested items provided. Case is now {dispute.status}.",
+            result_summary=f"[SIMULATED] Simulated reply from the {PARTY_NAME[party]}: {sent} of {len(outbound.requested_evidence)} requested items provided. Case is now {dispute.status}.",
         )
         db.refresh(inbound)
         return inbound

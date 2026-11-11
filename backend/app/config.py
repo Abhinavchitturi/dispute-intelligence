@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     PAYPAL_CLIENT_ID: Optional[str] = None
     PAYPAL_CLIENT_SECRET: Optional[str] = None
     PAYPAL_WEBHOOK_ID: Optional[str] = None
+    # In sandbox mode, how often to pull new disputes from PayPal (a buyer's report in the Resolution Center). 0 turns it off.
+    PAYPAL_POLL_SECONDS: int = 10
+    # PayPal case IDs the automatic sync leaves out (old test cases), comma-separated. Import case still brings one in.
+    PAYPAL_HIDDEN_CASES: str = ""
     
     # AI Provider
     AI_PROVIDER: str = "gemini"  # "none", "gemini", "openai", "anthropic"
@@ -25,8 +29,11 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o-mini"
     
-    # Demo mode: seconds before a simulated PayPal/buyer reply arrives
+    # Seconds before a simulated seller/buyer reply arrives
     DEMO_REPLY_DELAY_SECONDS: int = 20
+    # Sandbox cases too: the seller and buyer are test accounts that never really answer, so their replies are simulated.
+    # Turn off to wait for real emailed replies instead.
+    SIMULATE_REPLIES: bool = True
 
     # Security
     SECRET_KEY: str = "resolveiq-hackathon-local-secret-key-38912"
@@ -62,7 +69,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USERNAME: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
-    ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000"
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://localhost:8001,http://127.0.0.1:8001"
 
     @property
     def effective_gemini_api_key(self) -> Optional[str]:

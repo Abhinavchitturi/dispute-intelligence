@@ -81,6 +81,8 @@ class DecisionService:
         """A manager found a problem. The case returns to Ready to decide; nobody outside PayPal is told."""
         if dispute.status not in (PENDING_REVIEW, "RESOLVED"):
             raise DecisionError("Only a case waiting for review, or one already decided, can be reopened.")
+        if db.query(Flag).filter(Flag.dispute_id == dispute.id, Flag.status == "OPEN").first():
+            raise DecisionError("An investigator reported this decision. It stays closed: overturn the decision or keep it.")
         note = (note or "").strip()
         if not note:
             raise DecisionError("Say what the issue is, so the investigator knows what to fix.")
@@ -243,7 +245,7 @@ class DecisionService:
         for a in db.query(ManagerAlertModel).filter(ManagerAlertModel.dispute_id == dispute.id, ManagerAlertModel.kind == "AI_OVERTURN", ManagerAlertModel.status == "OPEN").all():
             a.status, a.sorted_by, a.sorted_at, a.sorted_note = "SORTED", who, datetime.utcnow(), "Replaced by the investigator's conflict"
         StrikeService.open_alert(db, "FLAG", f"Conflict raised by {who} on {dispute.id}",
-                                 f"{who} disagrees with the AI's decision on {dispute.id}. Reason: {points} Reopen the case and settle it by {due:%d %b} (within {FLAG_DAYS} days).",
+                                 f"{who} disagrees with the AI's decision on {dispute.id}. Reason: {points} The case stays closed. Review it and overturn the decision or keep it by {due:%d %b} (within {FLAG_DAYS} days).",
                                  user_id=user.id if user else None, dispute_id=dispute.id)
         db.commit()
         return flag
