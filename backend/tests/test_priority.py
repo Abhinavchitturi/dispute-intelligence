@@ -60,3 +60,31 @@ def test_conflicting_evidence_increases_priority():
         reason="MERCHANDISE_OR_SERVICE_NOT_RECEIVED"
     )
     assert score_conflicting > score_complete
+
+
+def test_handles_string_and_missing_inputs_safely():
+    score, factors = calculate_priority_score(
+        amount="199.99",
+        response_due_date="2026-01-01T12:00:00+00:00",
+        evidence_status="partial",
+        delivery_address_match="YES",
+        shipment_status="delivered",
+        reason=None,
+    )
+
+    assert 0.0 <= score <= 100.0
+    assert any(f.name == "Evidence Integrity & Gaps" for f in factors)
+    assert any(f.name == "Claim Classification Sensitivity" for f in factors)
+
+
+def test_reason_matching_handles_varied_case_and_spacing():
+    score, _ = calculate_priority_score(
+        amount=250.0,
+        response_due_date=None,
+        evidence_status="PENDING",
+        delivery_address_match="no",
+        shipment_status=None,
+        reason="  not as described  ",
+    )
+
+    assert score >= 30.0

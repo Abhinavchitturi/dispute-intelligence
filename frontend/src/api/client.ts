@@ -169,6 +169,15 @@ export async function testPayPalConnectivity(): Promise<any> {
   return res.json();
 }
 
+export async function syncPayPalDisputes(): Promise<{ created: number; updated: number; total: number; message: string }> {
+  const res = await fetch(`${API_BASE}/integrations/paypal/sync`, { method: 'POST' });
+  const payload = await res.json();
+  if (!res.ok) {
+    throw new Error(payload.detail || `Failed to sync PayPal disputes: ${res.statusText}`);
+  }
+  return payload;
+}
+
 export async function testAIConnectivity(): Promise<any> {
   const res = await fetch(`${API_BASE}/integrations/ai/test`, { method: 'POST' });
   return res.json();

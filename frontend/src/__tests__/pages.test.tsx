@@ -160,6 +160,30 @@ describe('ResolveIQ Page Components Suite', () => {
     expect(screen.getByTestId('loc')).toHaveTextContent(/^\/\?open=DEMO-DSP-1042$/); // still on the list
   });
 
+  it('syncs PayPal disputes into the queue', async () => {
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/integrations/paypal/sync')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ created: 1, updated: 0, total: 1, message: 'Imported 1 new PayPal Sandbox dispute.' })
+        });
+      }
+      if (url.includes('/api/disputes')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([disputeFixture]) });
+      }
+      return Promise.reject(new Error(`Unhandled url: ${url}`));
+    });
+
+    renderWithProviders(<DisputeQueuePage />);
+    await screen.findByText('DEMO-DSP-1042');
+    fireEvent.click(screen.getByRole('button', { name: /Sync PayPal/i }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/integrations/paypal/sync', { method: 'POST' });
+      expect(global.fetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it('clicking a dispute opens it in Investigation', async () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([disputeFixture, { ...disputeFixture, id: 'DEMO-DSP-2000', priority_score: 20 }]) });
     renderWithProviders(<DisputeQueuePage />);

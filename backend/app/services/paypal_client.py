@@ -85,16 +85,16 @@ class PayPalClient:
             return False, f"Unexpected error during connection test: {str(e)}", 500
 
     @classmethod
-    async def get_disputes(cls, page_size: int = 20) -> Dict[str, Any]:
+    async def get_disputes(cls, page_size: int = 100) -> Dict[str, Any]:
         """Lists disputes from PayPal Sandbox API."""
         token = await cls.get_access_token()
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-        url = f"{settings.PAYPAL_BASE_URL}/v1/customer/disputes?page_size={page_size}"
+        url = f"{settings.PAYPAL_BASE_URL}/v1/customer/disputes"
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(url, headers=headers)
+            resp = await client.get(url, headers=headers, params={"page_size": page_size})
             resp.raise_for_status()
             return resp.json()
 
