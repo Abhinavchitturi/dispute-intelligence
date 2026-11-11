@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, CheckCircle2, Clock, FolderOpen, Bot, Gavel, Hourglass, UserPlus, RefreshCw, ShieldAlert, ShieldCheck, Star, XCircle } from 'lucide-react';
-import { fetchCaseRequests, fetchDashboardSummary, fetchDisputes, fetchHealth, fetchMe, fetchNotifications, requestCases } from '../api/client';
-import { Badge, Button, Card, CountUp, EmptyState, ErrorState, Meter, PageHeader, SectionTitle, Skeleton, Textarea, useToast } from '../components/ui/kit';
-import { DistributeDialog } from '../components/DistributeDialog';
-import { AssignSelect } from '../components/AssignSelect';
+import { fetchDashboardSummary, fetchDisputes, fetchHealth, fetchMe, fetchNotifications } from '../api/client';
+import { Badge, Button, Card, CountUp, EmptyState, ErrorState, Meter, PageHeader, SectionTitle, Skeleton } from '../components/ui/kit';
 import { DecideBy, ScoreRing } from '../components/DisputeBits';
 import { cn, money, OPEN_STATUSES, reasonLabel, timeAgo, Tone } from '../lib/format';
 import { useNow } from '../lib/hooks';
@@ -48,11 +46,6 @@ export function OverviewPage() {
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: fetchHealth, retry: 0 });  // sandbox mode has no demo case
   const now = useNow(10_000);
   const { user, isManager } = useCurrentUser();
-  const toast = useToast();
-  const qc = useQueryClient();
-  const [distributing, setDistributing] = useState(false);
-  const [asking, setAsking] = useState(false);
-  const [note, setNote] = useState('');
 
   const summary = useQuery({ queryKey: ['dashboardSummary', user.name], queryFn: () => fetchDashboardSummary(user.name), refetchInterval: REFRESH_MS });
   const urgent = useQuery({
@@ -63,14 +56,6 @@ export function OverviewPage() {
 
   const me = useQuery({ queryKey: ['me', user.id], queryFn: fetchMe, refetchInterval: REFRESH_MS, enabled: !isManager, retry: 0 });
   const strikes = me.data?.strikes ?? user.strikes;
-  const myRequests = useQuery({ queryKey: ['caseRequests', 'mine'], queryFn: () => fetchCaseRequests(), enabled: !isManager, retry: 0 });
-  const ask = useMutation({
-    mutationFn: () => requestCases(note.trim() || undefined),
-    onSuccess: () => { toast('success', 'Your manager has been alerted.'); setAsking(false); setNote(''); qc.invalidateQueries({ queryKey: ['caseRequests'] }); },
-    onError: (e: Error) => toast('error', e.message),
-  });
-  const unowned = useQuery({ queryKey: ['disputes', 'unassigned'], queryFn: () => fetchDisputes({ unassigned: true, sort_by: 'priority_score', sort_order: 'desc' }), refetchInterval: REFRESH_MS, enabled: isManager, retry: 0 });
-  const needOwner = (unowned.data ?? []).filter((d) => OPEN_STATUSES.includes(d.status) && !d.assigned_to).slice(0, 5);
   const alerts = useQuery({ queryKey: ['notifications'], queryFn: fetchNotifications, refetchInterval: REFRESH_MS, enabled: isManager, retry: 0 });
   const data = summary.data;
   // A manager's list is the high-profile cases, since those are theirs.
@@ -102,37 +87,11 @@ export function OverviewPage() {
             <Button size="sm" onClick={refresh} aria-label="Refresh data">
               <RefreshCw className={cn('h-4 w-4', (summary.isFetching || urgent.isFetching) && 'animate-spin')} /> Refresh
             </Button>
-            {isManager && <Button size="sm" onClick={() => setDistributing(true)}>Distribute cases</Button>}
             <Button size="sm" onClick={() => navigate('/queue')}>{isManager ? 'View all cases' : 'View your cases'}</Button>
             {health?.mode !== 'sandbox' && <Button size="sm" variant="primary" onClick={() => navigate('/investigate/DEMO-DSP-1042')}>Open demo case</Button>}
           </>
         }
       />
-
-      {isManager && needOwner.length > 0 && (
-        <Card className="border-amber-400/30 p-5" aria-label="Nobody owns these yet">
-          <SectionTitle
-            title="Nobody owns these yet"
-            hint="Most urgent first. The score climbs every day. If you don't assign a case within a day, or it has 3 days or less left, it goes to an investigator at random."
-            action={<Button size="sm" variant="ghost" onClick={() => navigate('/queue?view=unassigned')}>All {data?.unassigned_count ?? needOwner.length} <ArrowRight className="h-3.5 w-3.5" /></Button>}
-          />
-          <ul className="-mx-2 divide-y divide-line">
-            {needOwner.map((d) => (
-              <li key={d.id} className="flex flex-wrap items-center gap-4 px-2 py-3">
-                <button onClick={() => navigate(`/investigate/${d.id}`)} className="flex min-w-0 flex-1 items-center gap-4 text-left">
-                  <ScoreRing score={d.priority_score} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-[13px] font-medium text-white">{d.id}</span><span className="text-[13px] text-muted">{reasonLabel(d.reason)}</span></div>
-                    <p className="mt-0.5 truncate text-sm text-slate-300">{money(d.amount, d.currency)} · {d.buyer_claim ?? 'No buyer statement recorded.'}</p>
-                  </div>
-                  <DecideBy status={d.status} due={d.response_due_date} outcome={d.outcome} />
-                </button>
-                <AssignSelect disputeId={d.id} assignedTo={d.assigned_to} />
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
 
       {isManager ? (
         !data ? (
@@ -199,30 +158,12 @@ export function OverviewPage() {
         </section>
       )}
 
-      {!isManager && data && data.my_cases_count === 0 && (() => {
-        const pending = myRequests.data?.find((r) => r.status === 'OPEN');
-        const last = myRequests.data?.find((r) => r.status === 'DECLINED');
-        return (
-          <Card className="p-5" aria-label="You have no cases">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-white">You have no cases right now</h2>
-                <p className="mt-0.5 max-w-xl text-[13px] text-muted">
-                  {pending ? 'You asked for more. Your manager has been alerted and will give you some.' : 'Your manager hands out cases. Ask for more and they will be alerted straight away.'}
-                  {!pending && last?.resolution_note && <> Last time: <span className="text-slate-300">{last.resolved_by}: {last.resolution_note}</span></>}
-                </p>
-              </div>
-              {pending ? <Badge tone="info" dot>Asked, waiting for your manager</Badge> : !asking && <Button variant="primary" onClick={() => setAsking(true)}>Ask for cases</Button>}
-            </div>
-            {asking && !pending && (
-              <div className="mt-4 flex flex-col gap-2 sm:max-w-lg animate-fade-in">
-                <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} aria-label="Message to your manager" placeholder="Optional. For example: I can take the harder ones." />
-                <div className="flex gap-2"><Button size="sm" variant="primary" loading={ask.isPending} onClick={() => ask.mutate()}>Send request</Button><Button size="sm" variant="ghost" onClick={() => setAsking(false)}>Cancel</Button></div>
-              </div>
-            )}
-          </Card>
-        );
-      })()}
+      {!isManager && data && data.my_cases_count === 0 && (
+        <Card className="p-5" aria-label="You have no cases">
+          <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-white">You have no cases right now</h2>
+          <p className="mt-0.5 max-w-xl text-[13px] text-muted">New cases are assigned automatically to whoever has the fewest open cases, so the next one is likely to come to you.</p>
+        </Card>
+      )}
 
       {!isManager && (
         <Card className="p-5" aria-label="Your strikes">
@@ -374,7 +315,6 @@ export function OverviewPage() {
           )}
         </Card>
       </section>
-      {isManager && <DistributeDialog open={distributing} onClose={() => setDistributing(false)} />}
     </>
   );
 }

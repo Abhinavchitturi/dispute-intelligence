@@ -315,9 +315,6 @@ export function managerReview(disputeId: string, payload: { action: 'APPROVE' | 
   return post<{ message: string; status: string }>(`/disputes/${disputeId}/admin-review`, payload, 'Failed to review the decision');
 }
 
-export function assignDispute(disputeId: string, assignee: string | null) {
-  return post<{ assigned_to: string | null }>(`/disputes/${disputeId}/assign`, { assignee }, 'Failed to update the owner of this case');
-}
 
 export function declareFromParty(disputeId: string, party: 'SELLER' | 'BUYER', kind: 'WITHDRAWN') {
   return post<DisputeMessage>(`/disputes/${disputeId}/parties/${party}/declare`, { kind }, 'Failed to record that');
@@ -385,11 +382,6 @@ export const updateUser = (id: string, changes: { display_name?: string; email?:
 export const resetPassword = (id: string, password: string) => post<{ success: boolean }>(`/users/${id}/password`, { password }, 'Failed to reset the password');
 export const blockUser = (id: string, reason: string) => post<ManagedUser>(`/users/${id}/block`, { reason }, 'Failed to block the user');
 
-export const fetchDistributionPlan = () => get<DistributionPlan>('/cases/distribution', 'Failed to load the cases waiting');
-export const distributeCases = (p: { counts?: Record<string, number>; investigator_ids?: string[]; per_person?: number; include_high_profile?: boolean }) => post<DistributionResult>('/cases/distribute', p, 'Failed to hand out the cases');
-export const fetchCaseRequests = (status?: string) => get<CaseRequest[]>(`/case-requests${status ? `?status=${status}` : ''}`, 'Failed to load case requests');
-export const requestCases = (note?: string) => post<CaseRequest>('/case-requests', { note }, 'Failed to ask for cases');
-export const declineCaseRequest = (id: string, note: string) => post<CaseRequest>(`/case-requests/${id}/decline`, { note }, 'Failed to decline');
 
 export const recordReply = (disputeId: string, messageId: string, provided: { evidence_type: string; file_name?: string }[], note?: string) =>
   post<DisputeMessage>(`/disputes/${disputeId}/replies/${messageId}/record`, { provided, note }, 'Failed to record the reply');

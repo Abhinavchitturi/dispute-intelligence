@@ -18,8 +18,10 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def quiet(monkeypatch):
     monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
-    monkeypatch.setattr(settings, "AUTO_ASSIGN_WHEN_DAYS_LEFT", -999)
-    monkeypatch.setattr(settings, "AUTO_ASSIGN_AFTER_DAYS", 999)   # these tests are about the AI Agent path; auto-assignment has its own tests below
+    # These tests are about the clock and the AI Agent, so the round that assigns new cases is switched off here
+    # (test_assignment.py covers it), except where a test turns it back on.
+    from backend.app.services import assignment_service
+    monkeypatch.setattr(assignment_service, "auto_assign", lambda db, disputes=None: 0)
     case_clock.reset_throttle()
 
 
@@ -107,8 +109,9 @@ def test_an_unassigned_case_is_never_handed_to_the_ai_agent_even_past_its_deadli
     assert not [a for a in _alerts("AI_TAKEOVER") if a["dispute_id"] == did]
 
 
-def test_a_case_nobody_assigns_goes_to_an_investigator_after_the_manager_s_days_never_to_the_ai(monkeypatch):
-    monkeypatch.setattr(settings, "AUTO_ASSIGN_AFTER_DAYS", 2)
+def test_a_case_without_an_owner_goes_to_an_investigator_on_the_next_round_never_to_the_ai(monkeypatch):
+    monkeypatch.undo()                      # this one is about assignment, so it runs for real
+    case_clock.reset_throttle()
     did = "DEMO-DSP-1053"
     _set(did, assigned_to=None, response_due_date=datetime.utcnow() - timedelta(days=1), ai_owned=False, created_at=datetime.utcnow() - timedelta(days=6))
     _tick()
@@ -183,33 +186,3 @@ def test_a_manager_overturning_the_agent_is_saved_as_training_feedback(agent):
 
 def test_a_decided_case_leaves_the_agents_list(agent):
     assert all(o["dispute_id"] != "DEMO-DSP-1048" for o in client.get("/api/ai-agent/owned", headers=agent).json())
-
-
-# ---------- a complaint nobody assigns is given out at random ----------
-def test_a_case_the_manager_doesnt_assign_in_a_day_goes_to_an_investigator_at_random(monkeypatch):
-    monkeypatch.setattr(settings, "AUTO_ASSIGN_AFTER_DAYS", 1)
-    monkeypatch.setattr(settings, "AUTO_ASSIGN_WHEN_DAYS_LEFT", 3)
-    now = datetime.utcnow()
-    _set("DEMO-DSP-1056", assigned_to=None, created_at=now - timedelta(hours=30), status="OPEN", response_due_date=now + timedelta(days=4))
-    _set("DEMO-DSP-1058", assigned_to=None, created_at=now - timedelta(hours=10), status="OPEN", response_due_date=now + timedelta(days=4, hours=14))
-    _tick(now)
-    late = _case("DEMO-DSP-1056")
-    assert late["assigned_to"] in ("Abhinav Chitturi", "Susmitha", "Jahnavi") and not late["ai_owned"]
-    assert _case("DEMO-DSP-1058")["assigned_to"] is None                   # still inside its day, with plenty of time left: the manager has time
-    db = SessionLocal()
-    try:
-        from backend.app.models.audit import AuditEvent
-        assert db.query(AuditEvent).filter(AuditEvent.dispute_id == "DEMO-DSP-1056", AuditEvent.action == "AUTO_ASSIGNED").count() == 1
-    finally:
-        db.close()
-    assert _tick(now)["auto_assigned"] == 0                                # and it isn't given out twice
-
-
-def test_a_case_with_little_time_left_does_not_wait_for_the_manager(monkeypatch):
-    monkeypatch.setattr(settings, "AUTO_ASSIGN_AFTER_DAYS", 1)
-    monkeypatch.setattr(settings, "AUTO_ASSIGN_WHEN_DAYS_LEFT", 3)
-    now = datetime.utcnow()
-    # It arrived two hours ago, but only three days are left. Waiting would take the investigator's time, so it goes out now.
-    _set("DEMO-DSP-1063", assigned_to=None, created_at=now - timedelta(hours=2), status="OPEN", response_due_date=now + timedelta(days=3))
-    _tick(now)
-    assert _case("DEMO-DSP-1063")["assigned_to"] in ("Abhinav Chitturi", "Susmitha", "Jahnavi")

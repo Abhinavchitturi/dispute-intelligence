@@ -5,8 +5,6 @@ import { Ban, CheckCircle2, ShieldCheck, Users } from 'lucide-react';
 import { fetchTeam, resetStrikes, unblockUser } from '../api/client';
 import { Badge, Button, Card, EmptyState, ErrorState, PageHeader, Segmented, Skeleton, Textarea, useToast } from '../components/ui/kit';
 import { UsersPanel } from '../components/UsersPanel';
-import { RequestsPanel } from '../components/RequestsPanel';
-import { fetchCaseRequests } from '../api/client';
 import { cn, parseServerDate } from '../lib/format';
 import { useCurrentUser } from '../lib/user';
 import { TeamMember } from '../types';
@@ -67,17 +65,16 @@ export function TeamPage() {
   const navigate = useNavigate();
   const { isManager } = useCurrentUser();
   const [params, setParams] = useSearchParams();
-  const tab = (['strikes', 'users', 'requests'].includes(params.get('tab') ?? '') ? params.get('tab') : 'strikes') as 'strikes' | 'users' | 'requests';
-  const setTab = (t: 'strikes' | 'users' | 'requests') => setParams(t === 'strikes' ? {} : { tab: t }, { replace: true });
-  const waiting = useQuery({ queryKey: ['caseRequests', 'open'], queryFn: () => fetchCaseRequests('OPEN'), refetchInterval: 20_000, enabled: isManager, retry: 0 });
+  const tab = (params.get('tab') === 'users' ? 'users' : 'strikes') as 'strikes' | 'users';
+  const setTab = (t: 'strikes' | 'users') => setParams(t === 'strikes' ? {} : { tab: t }, { replace: true });
   const team = useQuery({ queryKey: ['team'], queryFn: fetchTeam, refetchInterval: 20_000, enabled: isManager });
 
   if (!isManager) return <Card><EmptyState icon={<ShieldCheck className="h-6 w-6" />} title="Managers only" hint="Only managers see the team and unblock accounts." /></Card>;
   return (
     <>
       <PageHeader title="Team" subtitle="Manage everyone who signs in, and keep an eye on strikes. An investigator gets a strike when the AI reviewer overturns their decision. You are alerted at each set of strikes, and an account is blocked at the limit until you unblock it." />
-      <Segmented value={tab} onChange={setTab} options={[{ value: 'strikes', label: 'Strikes' }, { value: 'requests', label: 'Case requests', count: waiting.data?.length ?? 0 }, { value: 'users', label: 'All users' }]} />
-      {tab === 'requests' ? <RequestsPanel /> : tab === 'users' ? <UsersPanel /> : team.isError ? <ErrorState message="Couldn't load the team." onRetry={() => team.refetch()} /> : team.isLoading ? <Skeleton className="h-64 rounded-2xl" /> : !team.data?.length ? (
+      <Segmented value={tab} onChange={setTab} options={[{ value: 'strikes', label: 'Strikes' }, { value: 'users', label: 'All users' }]} />
+      {tab === 'users' ? <UsersPanel /> : team.isError ? <ErrorState message="Couldn't load the team." onRetry={() => team.refetch()} /> : team.isLoading ? <Skeleton className="h-64 rounded-2xl" /> : !team.data?.length ? (
         <Card><EmptyState icon={<Users className="h-6 w-6" />} title="No investigators" /></Card>
       ) : (
         <ul className="space-y-4" aria-label="Investigators">

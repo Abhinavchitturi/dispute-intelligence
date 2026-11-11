@@ -12,7 +12,6 @@ from backend.app.services.strike_service import StrikeService
 from backend.app.schemas.audit import (
     ActionDraftResponse,
     AdminReviewRequest,
-    AssignRequest,
     DecisionSubmitRequest,
     ActionExecuteRequest,
     ActionExecuteResponse,
@@ -262,25 +261,3 @@ async def manager_review(dispute_id: str, request: AdminReviewRequest, user: Opt
     side = "buyer" if outcome == "BUYER_FAVOR" else "seller"
     return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "outcome": dispute.outcome, "message_id": msgs[0].id,
             "message": f"Resolved in the {side}'s favor. The seller and the buyer have been told."}
-
-
-@router.post("/disputes/{dispute_id}/assign")
-def assign_dispute(dispute_id: str, request: AssignRequest, user: Optional[User] = Depends(manager_user), db: Session = Depends(get_db)):
-    """The manager gives a case to someone, or takes it off its owner. Investigators ask for cases instead of taking them."""
-    from backend.app.services import assignment_service as assigner
-    dispute = _get_dispute(db, dispute_id)
-    if dispute.status in CLOSED:
-        raise HTTPException(status_code=400, detail="This case is closed.")
-    who = (request.assignee or "").strip()
-    target = db.query(User).filter(User.display_name == who).first() if who else None
-    if who and (target is None or target.is_active is False):
-        raise HTTPException(status_code=400, detail=f"{who} isn't someone who can be given cases.")
-    if target and target.is_blocked:
-        raise HTTPException(status_code=400, detail=f"{who} is blocked. Unblock them first.")
-    by = actor_name(user, "manager")
-    assigner.assign_one(db, dispute, target, by)
-    if target:
-        StrikeService.notify(db, target.id, "ASSIGNED", "You have a new case", f"{by} assigned you {dispute.id}.", dispute.id)
-        assigner.settle_requests(db, target, by, 1)
-    db.commit()
-    return {"success": True, "dispute_id": dispute.id, "assigned_to": dispute.assigned_to}

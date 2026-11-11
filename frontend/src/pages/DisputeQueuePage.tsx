@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowDownUp, ChevronRight, Download, FileDown, FilterX, Gavel, Inbox, RefreshCw, Share2 } from 'lucide-react';
+import { ArrowDownUp, ChevronRight, Download, FileDown, FilterX, Gavel, Inbox, RefreshCw } from 'lucide-react';
 import { fetchDisputeDetail, fetchDisputes, syncPayPalDisputes } from '../api/client';
-import { AssignSelect } from '../components/AssignSelect';
-import { DistributeDialog } from '../components/DistributeDialog';
 import { ImportCaseDialog } from '../components/ImportCaseDialog';
 import { DisputeGrid, GRID_SORTS } from '../components/DisputeGrid';
 import type { GridApi } from 'ag-grid-community';
@@ -55,7 +53,6 @@ export function DisputeQueuePage() {
   const now = useNow();
   const { user, isManager } = useCurrentUser();
   const [params, setParams] = useSearchParams();
-  const [distributing, setDistributing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [grid, setGrid] = useState<GridApi<DisputeSummary> | null>(null);
   const [shown, setShown] = useState<number | null>(null);   // rows left after the table's column filters
@@ -133,7 +130,6 @@ export function DisputeQueuePage() {
           ? 'Every case, most urgent first. Search by case, buyer, seller or transaction. Click a dispute to investigate it, or use the eye for a quick look.'
           : 'The cases you are working, most urgent first, including any a colleague has shared with you. Click one to investigate it, or use the eye for a quick look.'}
         actions={<>
-          {isManager && <Button size="sm" variant="primary" onClick={() => setDistributing(true)}><Share2 className="h-4 w-4" />Distribute cases</Button>}
           <Button size="sm" onClick={() => sync.mutate()} loading={sync.isPending}>
             <RefreshCw className="h-4 w-4" /> Sync PayPal
           </Button>
@@ -155,7 +151,7 @@ export function DisputeQueuePage() {
           onChange={setView}
           options={[
             { value: 'all', label: 'All', count: counts.all },
-            ...(isManager ? [{ value: 'high' as View, label: 'High profile', count: counts.high }, { value: 'unassigned' as View, label: 'Unassigned', count: counts.unassigned }] : []),
+            ...(isManager ? [{ value: 'high' as View, label: 'High profile', count: counts.high }] : []),
             { value: 'new', label: 'New', count: counts.new },
             { value: 'waiting', label: 'Waiting on replies', count: counts.waiting },
             { value: 'progress', label: 'In progress', count: counts.progress },
@@ -229,7 +225,6 @@ export function DisputeQueuePage() {
       )}
       {!isLoading && rows.length > 0 && <p className="text-[13px] text-muted">Showing {Math.min(shown ?? rows.length, rows.length)} of {counts.all} disputes</p>}
 
-      <DistributeDialog open={distributing} onClose={() => setDistributing(false)} />
       <ImportCaseDialog open={importing} onClose={() => setImporting(false)} onImported={(id) => setOpen(id)} />
       <PreviewDrawer id={openId} onClose={() => setOpen(null)} onOpenCase={(id) => navigate(`/investigate/${id}`)} />
     </>

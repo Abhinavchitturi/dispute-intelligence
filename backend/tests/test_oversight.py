@@ -91,17 +91,17 @@ def test_sign_in_is_enforced_when_switched_on(monkeypatch):
     assert client.get("/api/alerts", headers=inv).status_code == 403
     assert client.get("/api/team", headers=inv).status_code == 403
     assert client.get("/api/alerts", headers=mgr).status_code == 200
-    # Investigators don't pick their own cases. The manager hands them out.
-    assert client.post("/api/disputes/DEMO-DSP-1043/assign", headers=mgr, json={"assignee": INV}).status_code == 200
-    assert client.post("/api/disputes/DEMO-DSP-1043/assign", headers=inv, json={"assignee": "Susmitha"}).status_code == 403
-    assert client.post("/api/disputes/DEMO-DSP-1043/assign", headers=inv, json={"assignee": INV}).status_code == 403  # the manager hands cases out
+    # Nobody picks or hands out cases: they are assigned automatically.
+    for h in (mgr, inv):
+        assert client.post("/api/disputes/DEMO-DSP-1043/assign", headers=h, json={"assignee": INV}).status_code in (404, 405)
 
 
 def test_the_actor_comes_from_the_token_not_the_request(monkeypatch):
     monkeypatch.setattr(settings, "AUTH_REQUIRED", True)
     h = {"Authorization": "Bearer " + client.post("/api/auth/login", json={"username": "abhinav", "password": "Abhinav#Invest2026"}).json()["token"]}
     m = {"Authorization": "Bearer " + client.post("/api/auth/login", json={"username": "paypal", "password": "PayPal#Manager2026"}).json()["token"]}
-    client.post("/api/disputes/DEMO-DSP-1049/assign", headers=m, json={"assignee": INV})          # it has to be their case to act on it
+    from backend.tests.helpers import set_owner
+    set_owner("DEMO-DSP-1049", INV)                                                                 # it has to be their case to act on it
     r = client.post("/api/disputes/DEMO-DSP-1049/decision", headers=h, json={"outcome": "SELLER_FAVOR", "reason": "The carrier delivered to the address.", "confirmed": True, "actor": "Someone Else"})
     assert r.status_code == 200
     monkeypatch.setattr(settings, "AUTH_REQUIRED", False)

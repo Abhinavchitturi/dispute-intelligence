@@ -131,6 +131,6 @@ When a decision is made, the seller and the buyer each get an email that lists, 
 - A manager can reset an investigator's strikes at any time with `POST /api/team/{user_id}/reset-strikes`. It also unblocks the account.
 
 ## Cases without an owner, and how the AI is trained
-- A case nobody takes is never given to the AI Agent. If the manager hasn't assigned it within a day (`AUTO_ASSIGN_AFTER_DAYS`), or it has 3 days or less left (`AUTO_ASSIGN_WHEN_DAYS_LEFT`), it goes to an investigator at random.
+- A case nobody takes is never given to the AI Agent. Every new case is assigned at once to the investigator with the fewest open cases.
 - When a manager presses **Train the AI** on a reported case, or revises an AI ruling, the correction is stored as a training example. `GET /api/ai-agent/feedback` returns each one once, with the case facts, the evidence (doubtful items marked), the investigator's reasons, the AI's own analysis, the AI's outcome, the correct outcome and the manager's reasons. `GET /api/ai-training` shows the same list to managers without marking anything as pulled.
 - The built-in reviewer does learn: each correction is also saved as a lesson (same kind of dispute, same evidence on file, same items not holding up, and the right ruling). New cases that match exactly follow the lesson, and say which case taught it. The real agent can ignore this and train on `/api/ai-agent/feedback` instead.

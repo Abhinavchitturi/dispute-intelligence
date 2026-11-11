@@ -20,7 +20,6 @@ import { ClaimPoints } from '../components/ClaimPoints';
 import { EvidenceChecklist } from '../components/EvidenceChecklist';
 import { ManagerReviewPanel, ReviseDecision } from '../components/ManagerPanels';
 import { OversightCards } from '../components/OversightCards';
-import { AssignSelect } from '../components/AssignSelect';
 import { CollaboratorsPanel } from '../components/CollaboratorsPanel';
 import { useCurrentUser } from '../lib/user';
 import { cn, evidenceLabel, evidenceMeta, fileSize, isClosed, money, outcomeMeta, outcomeText, parseServerDate, pastOutcomeLabel, prettifyCodes, reasonLabel, sentenceCase, titleCase } from '../lib/format';
@@ -125,7 +124,6 @@ export function CaseInvestigationPage() {
               {!decided && (
                 <span className="flex items-center gap-1.5">
                   {d.assigned_to ? <>Owner: {mine ? 'you' : d.assigned_to}</> : 'Unassigned'}
-                  {isManager && <AssignSelect disputeId={d.id} assignedTo={d.assigned_to} label="Assign this case" />}
                 </span>
               )}
             </div>

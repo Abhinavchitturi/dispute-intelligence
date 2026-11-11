@@ -349,6 +349,9 @@ async def _upsert(db: Session, external_id: str, dispute: Optional[Dispute], dat
     _rescore(db, dispute)
     msgs = _import_messages(db, dispute, data)
     evs = _import_evidence(db, dispute, data)
+    if is_new:
+        from backend.app.services.assignment_service import auto_assign
+        auto_assign(db, [dispute])   # straight to the least-busy investigator, the moment it arrives
     dispute.raw_payload_reference = str(data.get("update_time") or "") or None  # PayPal's update_time when we last read it
     return dispute, is_new, msgs, evs
 

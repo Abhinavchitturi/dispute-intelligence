@@ -5,7 +5,6 @@ import {
 } from 'ag-grid-community';
 import { Eye } from 'lucide-react';
 import { DisputeSummary } from '../types';
-import { AssignSelect } from './AssignSelect';
 import { Badge } from './ui/kit';
 import { EvidenceBadge, StatusBadge } from './ui/StatusBadges';
 import { DecideBy, ScoreRing } from './DisputeBits';
@@ -71,7 +70,6 @@ function PartiesCell({ data }: Cell) {
 
 function OwnerCell({ data, context }: Cell) {
   if (!data) return null;
-  // A manager assigns right in the grid. The click mustn't also open the case.
   if (data.ai_owned && OPEN_STATUSES.includes(data.status)) {
     return (
       <div className="flex h-full flex-col justify-center leading-tight">
@@ -79,9 +77,6 @@ function OwnerCell({ data, context }: Cell) {
         <span className="mt-1 text-xs text-muted">Nobody took it in time.</span>
       </div>
     );
-  }
-  if (context.isManager && OPEN_STATUSES.includes(data.status)) {
-    return <div className="flex h-full items-center" data-no-row-click onClick={(e) => e.stopPropagation()}><AssignSelect disputeId={data.id} assignedTo={data.assigned_to} /></div>;
   }
   const shared = (data.collaborators ?? []).length;
   return (
@@ -138,7 +133,7 @@ export function DisputeGrid({ rows, isManager, me, openId, sort, onOpenCase, onQ
         valueGetter: ({ data }) => dateValue(data),
         comparator: (a: Date | null, b: Date | null) => (a?.getTime() ?? Infinity) - (b?.getTime() ?? Infinity),
         cellRenderer: ({ data }: Cell) => (data ? centered(<DecideBy status={data.status} due={data.response_due_date} outcome={data.outcome} />) : null) },
-      { colId: 'owner', headerName: 'Owner', width: isManager ? 176 : 140, filter: 'agTextColumnFilter',
+      { colId: 'owner', headerName: 'Owner', width: 150, filter: 'agTextColumnFilter',
         valueGetter: ({ data }) => (data ? owner(data, me) : ''), cellRenderer: OwnerCell },
       { colId: 'view', headerName: '', width: 52, pinned: 'right', sortable: false, filter: false, resizable: false, suppressMovable: true, cellRenderer: QuickViewCell },
     ];
