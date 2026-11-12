@@ -1,446 +1,169 @@
-# PayPal Dispute Intelligence
+# ResolveIQ: AI dispute investigation for PayPal
 
-An AI investigation workbench for a PayPal dispute operations team. It is a prototype of an internal tool, built entirely on the PayPal **sandbox** for the PayPal AI Hackathon (Devpost).
+ResolveIQ is a workbench for **PayPal's own dispute team**: the investigators who decide who is right when a buyer says "my order never came" or "this isn't what I ordered", and the managers who oversee them.
 
-> **Status:** early development. Only the Phase 0 sandbox spike, the sample case and the record-ID convention exist today. Everything under "Planned features" is the design, not shipped code. This README is updated as pieces land.
+Today an investigator jumps between the payment, the order, the carrier's tracking and messages from both sides. ResolveIQ puts all of it on one screen, has AI brief every case with each claim traced to its source record, and has a second AI check every decision before it reaches PayPal. It runs on the real **PayPal sandbox** and uses **Gemini** for the AI.
 
-## What it does (planned)
+Built for the PayPal AI Hackathon. It's a prototype, not an official PayPal product.
 
-1. **Dispute queue:** open disputes sorted by an explainable priority score (deadline proximity, amount, merchant dispute rate, pattern flags). The UI shows how each factor contributed.
-2. **Investigation brief:** for each dispute the AI writes a summary, timeline, evidence checklist and a list of missing evidence.
-3. **No invented evidence:** every claim in a brief cites a source record (dispute, order, transaction, tracking event, message). The backend checks every citation. A claim with no valid source is marked "unverified" or removed.
-4. **Similar cases and patterns:** shows similar past cases and how they were resolved, and flags cross-seller patterns, such as one buyer filing against many sellers.
-5. **Human decides:** the AI recommends. The PayPal investigator asks the seller and the buyer for evidence, and makes the final call. The app never decides on its own.
-6. **Audit log:** every action is recorded.
+---
 
-MVP dispute reasons: *item not received* and *not as described*.
+## What it does
 
-## Real vs. synthetic data
+- **Live PayPal cases.** A buyer reports a problem in PayPal's Resolution Center. The dispute arrives in ResolveIQ within seconds (PayPal webhooks, plus a check every 10 seconds), with the order, the seller's tracking and the buyer's own words and photos.
+- **Assigned automatically.** Each new case goes straight to the investigator with the fewest open cases. High-profile cases (USD 1,000 and up) go to the manager.
+- **AI brief.** Gemini summarises the case. Every finding links to the record it comes from, and the brief lists what's missing.
+- **Evidence from both sides.** The investigator asks the seller and the buyer for evidence; the AI drafts each message from the case records. Replies are simulated for sandbox cases.
+- **AI-reviewed decisions.** The investigator decides with a reason, and an AI reviewer checks it against the evidence. If it agrees, the decision goes back to PayPal as PayPal's own ruling, and the buyer's refund lands in their PayPal account. If it overturns the investigator, that counts as a strike.
+- **Oversight.** The manager is alerted every 3 strikes, and an account is blocked at 10. An investigator can report an AI ruling they think is wrong; the manager reviews it and can overturn it, which also teaches the AI.
+- **A real data table.** The dispute queue is an AG Grid table: sort any column, filter each one, page through results and export to CSV.
 
-| Data | Source |
-|------|--------|
-| Disputes, orders, payments, tracking, transactions, all actions | **Real**, from the PayPal sandbox |
-| Past resolved cases (similar-case search) | Synthetic, seeded |
-| Buyer-seller chat logs, product descriptions | Synthetic, seeded |
-| The suspicious multi-seller buyer pattern | Synthetic, seeded |
+## Who uses it
 
-Synthetic records carry `synthetic: true` and are badged in the UI. Nothing here is real customer data.
+| Role | What they do |
+|---|---|
+| **Investigator** | Works the cases assigned to them, asks both sides for evidence, and decides. Can share a case with a colleague. |
+| **Manager** | Sees every case, handles high-profile ones, overturns any decision (including the AI's), and manages the team: strikes, blocks, users. |
+| **AI reviewer** | Checks each decision before it's final: approves it or overturns it. |
+| **AI Agent** | Can handle a case from start to finish (see [docs/ai-agent-contract.md](docs/ai-agent-contract.md)). |
 
-## Record IDs
+Sellers and buyers never sign in. They're reached by email (or, in the sandbox, on PayPal itself).
 
-Every citable piece of data has an ID such as `DSP-1`, `ORD-1`, `TXN-1`, `TRK-1`, `MSG-1`. The AI may only cite IDs that exist in the case. See [docs/record-ids.md](docs/record-ids.md). A hand-written example case is in [fixtures/sample_case.json](fixtures/sample_case.json).
+---
 
-## Tech stack
+## Quick start (demo mode, no keys needed)
 
-- Backend: Python, FastAPI
-- Frontend: React + AG Grid
-- Database: Postgres with pgvector (app data, audit log, case embeddings)
-- AI: Gemini (generation and embeddings)
-- PayPal: Disputes API v1, Orders/Payments, Shipment Tracking, Reporting, Webhooks (sandbox)
-- Hosting: Render
+Demo mode runs entirely on your machine, with a ready-made set of sample cases and a built-in rules engine in place of the AI.
 
-## Repository layout
+**You need:** Python 3.11 or newer, Node.js 18 or newer, and Git.
 
-```
-spike/                 Phase 0 PayPal sandbox scripts and setup notes
-fixtures/              Sample case (and, later, saved sandbox responses)
-docs/record-ids.md     Record ID convention
-requirements.txt       Python dependencies
-.env.example           Required environment variables
-```
-
-The backend, frontend and docker-compose setup are not in the repo yet.
-
-## Running what exists today
-
-### Prerequisites
-- Python 3.11+ (assumed; not yet tested on other versions)
-- A free PayPal developer account with sandbox business and personal accounts
-
-### Setup
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env      # fill in PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, GEMINI_API_KEY
-set -a; source .env; set +a
-```
-
-In the PayPal developer dashboard, create a sandbox app linked to the business account and enable the **Disputes** feature.
-
-### Sandbox spike
-Follow [spike/README.md](spike/README.md). It walks through getting a token, creating an order, opening a dispute, listing and fetching it, and adding tracking.
+**1. Get the code**
 
 ```bash
-python spike/paypal_spike.py token
-```
-
-Some request shapes in the spike script are marked `UNVERIFIED` until they have been run against the sandbox.
-
-## Safety rules
-
-- The AI never executes anything. Actions need an explicit human confirmation.
-- Sandbox-only endpoints (`adjudicate`, `require-evidence`) are demo controls, not part of the investigator's real action set.
-- `.env` holds secrets and must never be committed.
-
-## Roadmap
-
-| Phase | Dates | Goal |
-|-------|-------|------|
-| 0 | Oct 24–25 | Setup and sandbox spike |
-| 1 | by Nov 1 | End-to-end skeleton |
-| 2 | Nov 7 (freeze) | Full features |
-| 3 | Nov 8–10 | Polish and deploy |
-| 4 | Nov 11–12 | Demo video and submission |
-
-## License
-
-MIT is the intended license. The `LICENSE` file has not been added yet, and the hackathon requires an open-source license in the public repo.
-
-# ResolveIQ — AI-Powered PayPal Dispute Intelligence
-
-> **"Every claim. Every source. One clearer investigation."**
-
-ResolveIQ is an AI-assisted dispute investigation workbench for **PayPal's own dispute team**. When a buyer files a complaint, PayPal asks both the buyer and the seller for evidence, weighs it, and makes the call. ResolveIQ helps the investigator do that faster, with every claim traced to a source record.
-
-Instead of navigating fragmented carrier tracking portals, billing ledgers, customer correspondence threads, and PayPal interfaces, ResolveIQ aggregates available transaction facts into a unified workbench, computes explainable 0–100 risk priority scores, generates structured evidence-linked AI briefs, detects systemic anomaly patterns, and enables human-supervised action dispatching to the PayPal Sandbox REST API.
-
----
-
-## How a dispute moves (PayPal's side)
-
-**Who uses it:** a PayPal dispute investigator. The two other parties are the **buyer**, who filed the complaint, and the **seller**, who is being disputed. PayPal talks to each of them and decides.
-
-| Status | Meaning | Whose move |
-|---|---|---|
-| **New** (`OPEN`) | Filed. Nobody has been asked for anything. | PayPal |
-| **Waiting on seller / buyer / both** | PayPal has asked for evidence and a party owes a reply. | The seller and/or buyer |
-| **Ready to decide** (`UNDER_REVIEW`) | Every request is answered. | PayPal |
-| **Resolved** / **Closed** | PayPal decided. The outcome is *buyer's favor* or *seller's favor*. | Nobody |
-
-**What the investigator can do** (the *Take action* popup, three steps: choose, message, review):
-
-1. **Ask the seller for evidence**, such as a delivery signature, address verification or tracking. A checklist suggests what the case is missing.
-2. **Ask the buyer for evidence**, such as camera footage, a statement, or photos of the item.
-3. **Decide in the buyer's favor**: the buyer is refunded, taken from the seller.
-4. **Decide in the seller's favor**: no refund.
-
-Every message is drafted from the case's own records (each fact tagged with its record ID), is editable, and is shown in full before anything is sent. A decision sends one notice to both parties and is final. The **Messages** workspace shows each case's conversation, who PayPal is waiting on, and which cases have all their evidence in.
-
-**Evidence files:** a buyer's camera footage (or any file) is stored by PayPal's dispute system, not by this app. ResolveIQ keeps a *reference* to it (file name, type, size, who supplied it). The app can't view or analyse footage, and the draft decision notice says so.
-
-**Demo vs sandbox:** in demo mode the seller and buyer are simulated. After a short wait (`DEMO_REPLY_DELAY_SECONDS`, default 20) a reply arrives, supplies what that side plausibly could, and moves the case along. A seller can only produce a delivery signature if the carrier confirmed the address. Simulated replies are always badged. In sandbox mode nothing is faked: messages are recorded locally, and replies from real parties are **not yet synced** into the app.
-
----
-
-## 1. The Problem ResolveIQ Addresses
-
-- **Evidence Fragmentation:** Investigators lose 15–30 minutes per dispute reconciling detached data points across carrier scans, order systems, customer messages, and payment records.
-- **Hallucination & Bias Risk:** Generic generative AI solutions invent timestamps, make unfounded assumptions about buyer/seller integrity, and hallucinate delivery confirmations without audit trails.
-- **Missed Decision Targets:** Cases age past PayPal's resolution target because nobody noticed which ones were waiting on a reply, which had all their evidence, and which were urgent.
-- **Black-box Decisioning:** Opaque automated decision engines create regulatory exposure and lack explainable reasoning for human analysts.
-
-### How ResolveIQ Solves This
-- **Evidence-Linked AI Briefs:** Every factual finding in an AI brief cites exact source record IDs (`DEMO-DSP-1042`, `DEMO-SHIP-1042`, etc.). Clicking any citation immediately scrolls and highlights the source evidence record.
-- **Strict Human-in-the-Loop Safeguards:** AI acts solely as an analytical assistant, never an autonomous judge. Every request and every decision needs explicit investigator confirmation, and a decision also needs a tick confirming both sides' evidence was reviewed.
-- **Explainable Priority Scoring:** A deterministic 0–100 scoring model breaks down deadline urgency, evidence gaps, contradictory records, and financial exposure with human-readable factor contributions.
-- **Dual Operational Modes:** Works completely out of the box in **Demo Mode** using a deterministic synthetic dataset and an offline rules-based intelligence fallback, while supporting live **PayPal Sandbox Mode** for real OAuth 2.0 dispute orchestration.
-
----
-
-## 2. Architecture Overview
-
-```mermaid
-flowchart TD
-    subgraph Frontend["Frontend Client (React 18 + TypeScript + Vite + Tailwind CSS)"]
-        UI[Enterprise Fintech App Shell]
-        Dash[Overview Analytics Dashboard]
-        Queue[Prioritized Dispute Queue]
-        Investigate[Investigation Workbench]
-        BriefView[AI Brief & Citation Linker]
-        ActionPanel[Take-action popup: ask seller, ask buyer, decide]
-        SimilarView[Historical Precedent Explorer]
-        PatternView[Authorized Pattern Insights]
-        AuditView[Compliance Audit Trail]
-        SettingsView[Settings & Connectivity Tester]
-    end
-
-    subgraph Backend["Backend Services (FastAPI + Python 3.12)"]
-        API[FastAPI REST API Endpoints]
-        PrioritySvc[Explainable Priority Scoring Engine]
-        AISvc[Provider-Agnostic Intelligence Service]
-        CitationVal[Citation Validator & Evidence Grounding]
-        SimSvc[Weighted Historical Case Matcher]
-        PatternSvc[Authorized Anomaly & Cluster Analyzer]
-        AuditSvc[Sanitized Event Audit Trail Engine]
-        PayPalClient[PayPal Sandbox REST Client (OAuth 2.0)]
-    end
-
-    subgraph Storage["Persistence Layer (SQLAlchemy 2.0)"]
-        DB[(Relational DB: Disputes, Transactions, Orders, Shipments, Evidence, Briefs, HistoricalCases, AuditEvents)]
-    end
-
-    subgraph External["External Integrations"]
-        PayPalAPI["PayPal Sandbox REST API (api-m.sandbox.paypal.com)"]
-        LLMAPI["External LLM Provider (Google Gemini / OpenAI / Anthropic)"]
-    end
-
-    UI --> API
-    API --> PrioritySvc
-    API --> AISvc
-    AISvc --> CitationVal
-    AISvc -.-> LLMAPI
-    API --> SimSvc
-    API --> PatternSvc
-    API --> AuditSvc
-    API --> PayPalClient
-    PayPalClient -.-> PayPalAPI
-    API --> DB
-```
-
----
-
-## 3. Technology Stack
-
-- **Frontend:**
-  - React 18 with TypeScript
-  - Vite build tool & development server
-  - Tailwind CSS with a custom fintech theme (`#070D1E`, `#0B132B`, `#161F38`, `#233054`)
-  - Lucide React iconography
-  - Recharts for portfolio analytics and priority distributions
-  - React Router DOM (v6) for multi-view routing
-  - TanStack React Query (v5) for server state management & caching
-  - Vitest + Happy-DOM + React Testing Library for frontend component testing
-
-- **Backend:**
-  - Python 3.12+ with FastAPI
-  - Pydantic v2 & Pydantic-Settings for strict request/response data contracts
-  - SQLAlchemy 2.0 ORM with SQLite local fallback (or PostgreSQL in production)
-  - HTTPX for asynchronous external REST communications
-  - Pytest & Pytest-Asyncio for backend integration & unit test suites
-
----
-
-## 4. Local Setup Guide
-
-### Prerequisites
-- Python 3.11 or newer (Python 3.12 recommended)
-- Node.js 18 or 20+ with npm (or pnpm)
-- Git
-
-### Step 1: Clone and Configure Environment
-```bash
-git clone <repository-url>
-cd resolveiq
-
-# Copy environment configuration
+git clone https://github.com/Abhinavchitturi/dispute-intelligence.git
+cd dispute-intelligence
 cp .env.example .env
 ```
 
-### Step 2: Install Backend Dependencies & Seed Database
-```bash
-# Install backend requirements
-python -m pip install -r backend/requirements.txt
+**2. Install the backend** (in a virtual environment)
 
-# Populate initial synthetic dataset (27 disputes, 20 historical precedents)
-python -m backend.app.seed.seed_data
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r backend/requirements.txt
 ```
 
-### Step 3: Install Frontend Dependencies
+**3. Install the frontend**
+
 ```bash
 cd frontend
 npm install
 cd ..
 ```
 
-### Step 4: Run Application
-Open two terminal windows:
+**4. Start both** (two terminals, both from the project folder)
 
-**Terminal 1 — Backend API Server (Port 8000):**
 ```bash
-# Windows PowerShell
-$env:PYTHONPATH="."
-python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
-
-# Linux / macOS
-PYTHONPATH=. uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
+# Terminal 1: backend, http://127.0.0.1:8000
+source .venv/bin/activate
+python -m uvicorn backend.app.main:app --port 8000 --reload
 ```
-FastAPI Interactive OpenAPI Docs will be available at: `http://127.0.0.1:8000/docs`
 
-**Terminal 2 — Frontend Dev Server (Port 5173):**
 ```bash
+# Terminal 2: frontend, http://localhost:5173
 cd frontend
 npm run dev
 ```
-Open your browser at `http://localhost:5173`.
+
+**5. Open http://localhost:5173 and sign in.** The demo accounts are in [credentials.md](credentials.md): a manager (`paypal`) and three investigators. The sample cases are created automatically the first time the backend starts.
+
+> If port 8000 is taken, run the backend on another port (for example `--port 8001`) and start the frontend with `API_TARGET=http://127.0.0.1:8001 npm run dev`.
 
 ---
 
-## 5. Environment Variables & Modes
+## PayPal sandbox mode (real PayPal, live AI)
 
-Configuration is managed via `.env` (sanitized example in `.env.example`):
+**One-time setup:**
 
-| Variable | Default | Description |
-|---|---|---|
-| `RESOLVEIQ_MODE` | `demo` | `"demo"` (offline synthetic dataset) or `"sandbox"` (live PayPal Sandbox API). |
-| `DATABASE_URL` | `sqlite:///./resolveiq.db` | SQLAlchemy connection string (SQLite local, PostgreSQL supported). |
-| `PAYPAL_ENV` | `sandbox` | Target PayPal environment (`sandbox` or `production`). |
-| `PAYPAL_CLIENT_ID` | `""` | PayPal Sandbox App Client ID (Required for Sandbox Mode). |
-| `PAYPAL_CLIENT_SECRET` | `""` | PayPal Sandbox App Client Secret (Server-side only). |
-| `AI_PROVIDER` | `none` | `"none"` (deterministic rules engine), `"gemini"`, or `"openai"`. |
-| `AI_API_KEY` | `""` | API key for external LLM provider. |
-| `AI_MODEL` | `gemini-1.5-pro` | Model name when an external AI provider is configured. |
+1. At [developer.paypal.com](https://developer.paypal.com), create a **sandbox app** linked to a sandbox **business** account, and turn on its **Disputes** feature. Also create a sandbox **personal** (buyer) account, US / USD.
+2. Get a Gemini API key at [aistudio.google.com](https://aistudio.google.com).
+3. In `.env`, set:
 
----
-
-## 6. How to Run Demo Mode vs PayPal Sandbox Mode
-
-### A. Running in Demo Mode (Zero Credentials Required)
-1. Ensure `RESOLVEIQ_MODE=demo` in `.env`.
-2. Leave `PAYPAL_CLIENT_ID` and `AI_API_KEY` blank.
-3. Boot the application.
-4. ResolveIQ will utilize the 12 synthetic seeded disputes and 20 historical cases.
-5. AI Briefs are produced via the deterministic rules engine following strict evidence-grounding constraints.
-6. Actions (e.g., submitting tracking or accepting claims) execute in a verified local simulation, updating dispute state and persisting entries to the Compliance Audit Trail without calling external endpoints.
-
-### B. Configuring PayPal Sandbox Mode
-1. Register or log in to [PayPal Developer Portal](https://developer.paypal.com).
-2. Create a REST API app under **Dashboard > My Apps & Credentials > Sandbox**.
-3. Copy the Client ID and Secret into your `.env`:
-   ```bash
+   ```env
    RESOLVEIQ_MODE=sandbox
-   PAYPAL_CLIENT_ID=your_sandbox_client_id
-   PAYPAL_CLIENT_SECRET=your_sandbox_secret
+   PAYPAL_CLIENT_ID=your-sandbox-client-id
+   PAYPAL_CLIENT_SECRET=your-sandbox-secret
+   AI_PROVIDER=gemini
+   GEMINI_API_KEY=your-gemini-key
    ```
-4. Restart the backend.
-5. In ResolveIQ, navigate to **Settings & Integrations** and click **Test PayPal Sandbox Connection**.
-6. When investigating sandbox-originated disputes, approved actions will be dispatched directly to PayPal's REST endpoints (`/v1/customer/disputes/{id}/provide-evidence` and `/accept-claim`).
+
+4. Restart the backend. In sandbox mode the sample cases are removed: ResolveIQ shows only real PayPal sandbox cases.
+
+**Make a case (any time):**
+
+```bash
+./scripts/paypal_sandbox.py --story not-received
+```
+
+This pays for a realistic order (Sony headphones, $289), adds the seller's USPS tracking marked "delivered", and prints exactly what to choose, write and upload when you report the problem on PayPal as the buyer. Approve the payment in the browser the first time; after that, the saved buyer is charged directly. The other story is `--story not-as-described`.
+
+**Get cases in seconds:** in another terminal, leave this running:
+
+```bash
+./scripts/paypal_webhook.py
+```
+
+It opens a temporary public tunnel to your backend and registers it as the sandbox app's PayPal webhook. Without it, new cases still arrive: ResolveIQ checks PayPal every 10 seconds, but PayPal's own list can take a few minutes to include a new case. To skip that wait for one case, copy the case ID PayPal shows the buyer and use **Import case** on the Disputes page.
+
+The full sandbox guide, with troubleshooting, is in [docs/paypal-sandbox-reset-runbook.md](docs/paypal-sandbox-reset-runbook.md).
 
 ---
 
-## 7. How to Run the Automated Test Suites
+## Settings
 
-### Backend Tests (Pytest)
-Exercises priority scoring boundaries, citation validation, dispute filtering, action confirmation checks, secret redaction, and full E2E investigation workflow:
-```bash
-# Windows PowerShell
-$env:PYTHONPATH="."
-python -m pytest backend/tests -v
+All settings live in `.env` (see [.env.example](.env.example)). The ones you're most likely to change:
 
-# Linux / macOS
-PYTHONPATH=. pytest backend/tests -v
-```
-*(Result: 16 passed tests in ~6 seconds)*
-
-### Frontend Tests (Vitest + Testing Library)
-Exercises priority score thresholds, badge rendering, evidence completeness indicators, and environment labels:
-```bash
-cd frontend
-npm test
-```
-*(Result: 6 passed tests in ~5 seconds)*
-
----
-
-## 8. Real Capabilities vs Synthetic Data
-
-| Feature | Real Implementation | Synthetic / Demo Data Boundary |
+| Setting | Default | What it does |
 |---|---|---|
-| **Priority Scoring** | **100% Real:** Deterministic 4-factor scoring engine with explainable weights. | Operates on seeded or sandbox fields. |
-| **Evidence Grounding** | **100% Real:** Citation validator verifies cited record IDs in bounded case context. | Operates on seeded or sandbox records. |
-| **Investigation Briefs** | **100% Real:** Rules-based fallback or real Gemini LLM API when configured. | Factual details derived from bounded case records. |
-| **Historical Matching** | **100% Real:** Multi-attribute weighted similarity search algorithm. | 20 seeded precedents with outcome labels. |
-| **Pattern Insights** | **100% Real:** SQL cluster analysis across reasons, missing evidence, and address gaps. | Aggregates authorized local dispute records. |
-| **PayPal Sandbox Client**| **100% Real:** OAuth 2.0 token caching and authenticated REST calls. | Used when valid Sandbox credentials are provided. |
-| **Customer Identifiers**| Masked / Fictional | All names (e.g. Alex Morgan, TechStore) are visibly synthetic. |
+| `RESOLVEIQ_MODE` | `demo` | `demo` uses sample cases; `sandbox` uses real PayPal sandbox cases only. |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | empty | Your PayPal sandbox app's keys. |
+| `AI_PROVIDER` | `gemini` | `gemini` for live AI, or `none` for the built-in rules engine. |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | empty, `gemini-3.5-flash-lite` | Your Gemini key and model. |
+| `PAYPAL_POLL_SECONDS` | `10` | How often to check PayPal for new cases (sandbox mode). |
+| `SIMULATE_REPLIES` | `true` | Simulate the seller's and buyer's replies on sandbox cases. |
+| `HIGH_PROFILE_AMOUNT` | `1000` | Cases at or above this amount go to the manager. |
+| `PAYPAL_HIDDEN_CASES` | empty | PayPal case IDs the automatic sync should skip (for example, old test cases). |
+| `SMTP_HOST` | empty | A mail server for real emails. Without it, emails are kept in the app and shown on each case. |
 
 ---
 
-## 9. Demo Walkthrough: Investigating Main Demo Case `DEMO-DSP-1042`
+## Tests
 
-1. **Open Overview Dashboard:**
-   - Four tiles show where cases stand: open, decide within 48 hours, waiting on replies, ready to decide. "Needs attention now" lists the most urgent.
-   - Click **Open demo case** (or pick `DEMO-DSP-1042` from the list). It starts as **New**: nobody has been asked for anything.
-2. **Review Case Header & Transaction Context:**
-   - Case ID: `DEMO-DSP-1042`
-   - Disputed Amount: `USD 450.00`
-   - Reason: `Item Not Received`
-   - Buyer Statement: *"The item never arrived. Front porch camera shows no carrier delivery at stated time."*
-   - Carrier: `UPS` (`1Z9999999999999999`), Status: `DELIVERED`, Address Verification: `unknown`.
-3. **Inspect AI Investigation Brief:**
-   - Observe that the AI reports carrier tracking indicates delivery while address verification and merchant correspondence remain unavailable.
-   - Notice that the AI **does not** conclude either party is dishonest and **does not** automatically decide who wins.
-   - Click on the source citation `DEMO-SHIP-1042` under Finding 4: The workbench automatically switches to the **Source Evidence** tab and highlights the shipment record.
-4. **Inspect Missing Evidence & Inconsistencies:**
-   - The brief flags `PROOF_OF_DELIVERY_SIGNATURE` and `ADDRESS_VERIFICATION` as missing documents.
-5. **Inspect Similar Historical Precedents:**
-   - Click the **Similar Cases** tab to view matching historical cases (e.g., `HIST-CASE-203` with 80% match, where tracking was delivered but address verification was unknown).
-6. **Ask the seller for evidence:**
-   - Click **Take action**, keep *Ask the seller for evidence*, then **Next: write message**.
-   - The checklist already ticks what the case lacks (delivery signature, address verification, merchant correspondence). Review the drafted message, then **Next: review** and **Send request**.
-   - The case becomes **Waiting on seller** and you land on the conversation. The seller replies after a few seconds. Because the carrier never confirmed the address, they can send tracking and correspondence but **not** a signature or address check, and their reply says so.
-7. **Ask the buyer for evidence:**
-   - **Take action**, *Ask the buyer for evidence*. The list is the buyer's own: camera footage, delivery address confirmation, a statement.
-   - The buyer replies with their footage as a file *reference* and the case becomes **Ready to decide**. The Evidence tab shows who provided each document.
-8. **Decide:**
-   - **Take action**, *Decide in the buyer's favor* (or the seller's). The draft notice lists what was reviewed (tagged *Provided by seller* / *Provided by buyer* / *Not provided*), the reasons, and what happens next. Warnings appear if the decision conflicts with the records.
-   - Deciding is two steps: choose, then decide. Tick *I've reviewed the evidence on file*, then **Confirm decision**. Both parties are notified, the case is **Resolved**, and no further action is offered.
-   - **You don't have to ask both sides first.** One concrete document on file is enough to decide on, so for a quick demo you can open a case, click **Take action**, pick a decision and confirm. Clicking a dispute in the list opens it in **Investigation**, and the sidebar's Investigation link returns to the case you last opened.
-9. **Verify Compliance Audit Trail:**
-   - Open the **Activity log** to see every request, reply and decision with timestamp, actor (`investigator_user`), and outcome.
+```bash
+# Backend (from the project folder, virtual environment active)
+python -m pytest backend/tests -q
+
+# Frontend
+cd frontend && npm test
+```
+
+The tests run offline on the sample data, whatever your `.env` says: they never call PayPal or Gemini.
 
 ---
 
-## 10. Security & Privacy Safeguards
+## Project layout
 
-- **No Secret Leakage:** Client secrets, bearer tokens, and API keys are stored exclusively in backend server environments and are systematically redacted from audit logs (`[REDACTED]`).
-- **Prompt Injection Defense:** Customer messages and dispute remarks are strictly bounded within structured JSON contexts; system prompt instructions forbid treating user messages as AI operational instructions.
-- **Human Approval Mandatory:** No request, refund, or decision can execute without active human confirmation.
-- **Safe Development Environment:** Local SQLite fallback with check_same_thread safe pooling, parameterized queries via SQLAlchemy ORM, and comprehensive CORS whitelisting.
+```
+backend/app/       FastAPI app: API routes, services (PayPal sync, AI, decisions, assignment), models
+backend/tests/     Backend tests (pytest)
+frontend/src/      React app: pages, components (the AG Grid queue is components/DisputeGrid.tsx)
+scripts/           paypal_sandbox.py (make a sandbox case) and paypal_webhook.py (instant cases)
+docs/              Sandbox guide, AI agent contract, demo assets and video script
+credentials.md     Demo sign-in accounts
+```
 
----
+**Built with:** Python, FastAPI, SQLAlchemy, SQLite · React, TypeScript, Vite, Tailwind, TanStack Query, AG Grid · PayPal Disputes, Orders, Payments, Shipment Tracking and Webhooks APIs (sandbox) · Google Gemini.
 
-## 11. Hackathon Pitch Summary
+## License
 
-Payment dispute investigation is one of the highest-friction bottlenecks in modern fintech operations. Today's analysts spend up to 70% of their time copy-pasting tracking numbers, cross-referencing order records, and reading lengthy customer threads.
-
-**ResolveIQ** transforms dispute management with an intelligent, evidence-grounded workbench that:
-1. Surfaces what matters instantly with explainable 0–100 risk priority scoring.
-2. Synthesizes complex claims into verified, citation-backed investigation briefs.
-3. Automatically identifies missing documentation before response windows expire.
-4. Keeps the human analyst firmly in control with one-click sandbox action orchestration.
-
-*"Every claim. Every source. One clearer investigation."*
-
----
-
-## Sign-in
-
-Everything sits behind a login. The demo accounts and their passwords are listed in [credentials.md](credentials.md). The accounts are created automatically the first time the backend starts.
-
-## How PayPal staff reach sellers and buyers
-
-Sellers and buyers don't use this app. It is for PayPal's own team. So everything that has to reach them goes out **by email**, and everything they send back comes in **by email**:
-
-- **Evidence requests** are emailed to the seller or buyer with the case number in the subject (for example `[DEMO-DSP-1042]`), what is needed, and how to reply.
-- **Their replies** go to the disputes mailbox. The mail provider forwards each one to `POST /api/inbound-mail` (header `X-Inbound-Secret`), and it lands on the case as an unread **Email reply**, with the names of its attachments.
-- **Someone at PayPal goes through it:** open the reply, tick which of the requested documents really came, and save. Only then does the evidence count and the case move on. Anything unticked is recorded as not sent.
-- **Decisions** are emailed to both sides, listing the proof by name, with the appeals address. A reply to a decided case opens an appeal.
-- **Mail server:** set `SMTP_HOST` (and the login) in `.env` to send for real. Without it, every email is kept and shown under the case's **Emails** tab as "Kept here, not sent", so nothing is lost.
-- **Demo:** each chat has **Simulate email reply**, which sends a reply through the same path.
-- **Alerts for the team** (strikes, requests, the AI Agent taking a case) stay inside the app, in the pinned banner and the bell.
-
-## Who does what
-
-1. **Investigator** works the cases the manager gives them, and can **share** a case with colleagues so several investigators work it together (the owner stays the owner; anyone on it can work it; the owner, the manager or the person themselves can take someone off), and decides with a reason. With no cases left, they can ask the manager for more, and the manager is alerted. The decision goes to the AI reviewer.
-2. **AI reviewer** (built separately, see [docs/ai-agent-contract.md](docs/ai-agent-contract.md)) approves or overturns. An overturn is a strike for the investigator.
-3. **Manager** (PayPal):
-   - takes the **high-profile cases** (any case for USD 1,000 or more; the threshold is the `HIGH_PROFILE_AMOUNT` setting. It goes by price only, since a priority score keeps changing) and decides them directly, with no AI review;
-   - **hands out cases**: assign one case from its row, or use **Distribute cases**: press plus or minus next to each person for how many cases they get, or press **Split evenly** to share them out (30 cases between three people is 10 each). The most urgent go out first. Investigators don't pick their own cases;
-   - sees **unassigned cases first**: every case has a 5-day window (`CASE_WINDOW_DAYS`) and its priority score climbs as the days run out, so the most urgent unowned cases lead the Overview. A case nobody takes by its deadline goes to the **AI Agent**, which handles the whole case, and the manager gets a pinned alert;
-   - is the **only one who sees every case**; investigators see just the cases they own, plus any a colleague has shared with them (anything else answers "not found", on every screen and API route);
-   - can view **every case** (Disputes page, or the search bar at the top) and step in on any of them;
-   - overturns anyone, including the AI. Corrections to the AI are saved as training feedback;
-   - gets an alert every 3 strikes, pinned on top and pinged hourly until marked **Sorted**; accounts are blocked at 10 strikes until the manager unblocks them;
-   - **manages all users** on the Team page: add people, rename them, change roles, reset passwords, block or deactivate.
-
-An unhappy buyer or seller can email the appeals address, which opens a new case for a different investigator with the manager joined.
+See [LICENSE](LICENSE).

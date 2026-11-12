@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ManagerReviewPage } from '../pages/ManagerReviewPage';
+import { AITrainingPage } from '../pages/AITrainingPage';
 import { signInAs, signOut } from './session';
 import { DisputeQueuePage } from '../pages/DisputeQueuePage';
 import { CaseInvestigationPage } from '../pages/CaseInvestigationPage';
@@ -108,21 +109,14 @@ describe('Manager review', () => {
     expect(posted('/admin-review')).toMatchObject({ action: 'REOPEN', note: 'Ask the seller for the address check.' });
   });
 
-  it('lists the investigators\' flags and lets the manager overturn the AI, with reasons', async () => {
+  it('lists the investigators\' flags in short, with one button that opens the case where it is settled', async () => {
     asManager(); api([], [], [flagFixture]);
-    mount(<ManagerReviewPage />, '/manager');
-    fireEvent.click(await screen.findByRole('tab', { name: /Flags/ }));
+    mount(<ManagerReviewPage />, '/manager?tab=flags');                 // an alert or tile can open this tab directly
     const card = await screen.findByLabelText('Flag on D-7');
-    expect(within(card).getByText('The AI ignored the signed delivery record.')).toBeInTheDocument();
-    expect(within(card).getByText("The investigator decided")).toBeInTheDocument();
-    expect(within(card).getByText('No proof of delivery.', { exact: false })).toBeInTheDocument();
-    fireEvent.click(within(card).getByRole('button', { name: 'Overturn the AI' }));
-    const go = within(card).getByRole('button', { name: 'Overturn the AI' });
-    expect(go).toBeDisabled();
-    fireEvent.change(within(card).getByLabelText('Your reasons for D-7'), { target: { value: 'The signature is on file. The AI missed it.' } });
-    fireEvent.click(within(card).getByRole('button', { name: 'Overturn the AI' }));
-    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/flags/FLG-1/resolve'))).toBe(true));
-    expect(posted('/flags/FLG-1/resolve')).toEqual({ action: 'OVERTURN', note: 'The signature is on file. The AI missed it.' });
+    expect(within(card).getByText(/decided in seller's favor/)).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: /Open case details/ })).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /Overturn decision/ })).not.toBeInTheDocument();    // the decision is made on the case itself
+    expect(within(card).queryByRole('button', { name: /Keep the AI decision/ })).not.toBeInTheDocument();
   });
 
   it('can overturn a decided case, and says the correction goes to the AI team', async () => {
@@ -140,16 +134,30 @@ describe('Manager review', () => {
     expect(posted('/D-9/revise')).toEqual({ outcome: 'SELLER_FAVOR', note: 'The tracking shows delivery.' });
   });
 
-  it('shows what the AI is being taught from the manager\'s corrections', async () => {
+  it('the AI Training page lays out each correction as a lesson: what it saw, what it ruled, what was right, what it missed', async () => {
     asManager();
     api([], [], [], [{ review_id: 'R1', dispute_id: 'D-3', model: null, investigator_decision: 'SELLER_FAVOR', ai_verdict: 'OVERTURN', ai_outcome: 'BUYER_FAVOR', ai_rationale: 'No proof of delivery.',
-      correct_outcome: 'SELLER_FAVOR', correction_note: 'The signature was on file.', corrected_by: 'PayPal', corrected_at: '2026-01-02T10:00:00', source: 'MANAGER_REVIEW', already_exported: false }]);
-    mount(<ManagerReviewPage />, '/manager');
-    fireEvent.click(await screen.findByRole('tab', { name: /AI feedback/ }));
-    const list = await screen.findByLabelText('AI feedback');
-    expect(within(list).getByText('D-3')).toBeInTheDocument();
-    expect(within(list).getByText('Not pulled yet')).toBeInTheDocument();
-    expect(within(list).getByText(/The signature was on file\./)).toBeInTheDocument();
+      correct_outcome: 'SELLER_FAVOR', correction_note: 'The signature was on file.', corrected_by: 'PayPal', corrected_at: '2026-01-02T10:00:00', source: 'INVESTIGATOR_FLAG', already_exported: false,
+      case: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', amount: 205, currency: 'USD', buyer_claim: 'Never came.', investigator_reason: 'UPS delivered on 31 October.' },
+      evidence: { seller: [{ type: 'CARRIER_TRACKING', label: 'Carrier tracking', status: 'PROVIDED', description: 'x', concern: null }],
+                  buyer: [{ type: 'BUYER_CAMERA_FOOTAGE', label: 'Camera footage', status: 'PROVIDED', description: 'y', concern: 'The footage is from Oct 26, but the carrier delivered on Oct 31.' }], records: [] },
+      ai_analysis: { reasoning: 'The footage shows no carrier.' },
+      lesson: { id: 'LSN-1', summary: 'In "not received" disputes, the camera footage can be on file and still not count when it does not hold up.', evidence_types: [], doubtful_types: ['BUYER_CAMERA_FOOTAGE'], times_applied: 2, applied_to: ['D-8', 'D-9'], created_at: '2026-01-02T10:00:00' } }]);
+    mount(<AITrainingPage />, '/training');
+    const lesson = await screen.findByLabelText('Lesson from D-3');
+    expect(within(lesson).getByText('Learned')).toBeInTheDocument();
+    const learned = within(lesson).getByLabelText('What it learned');
+    expect(learned).toHaveTextContent('camera footage can be on file and still not count');
+    expect(learned).toHaveTextContent('Used on 2 new cases: D-8, D-9');
+    expect(within(lesson).getByText('What it ruled before (the mistake)')).toBeInTheDocument();
+    expect(within(lesson).getByText('The footage shows no carrier.')).toBeInTheDocument();      // the AI's own analysis, as it was
+    expect(within(lesson).getByText('What was right (your correction)')).toBeInTheDocument();
+    expect(within(lesson).getByText('The signature was on file.')).toBeInTheDocument();
+    expect(within(lesson).getByText('Camera footage (doubtful)')).toBeInTheDocument();
+    const summary = screen.getByLabelText('Training summary');
+    expect(summary).toHaveTextContent('Lessons learned');
+    expect(within(summary).getByText('Times it used a lesson').nextSibling).toHaveTextContent('2');
+    expect(summary).toHaveTextContent('0 of 1');
   });
 });
 
@@ -171,6 +179,16 @@ describe('Your cases and Ready to decide', () => {
     }) as any;
     return calls;
   };
+
+  it('has a Completed tab for cases that are decided, settled or dismissed', async () => {
+    api();
+    mount(<DisputeQueuePage />, '/queue');
+    const tab = await screen.findByRole('tab', { name: /Completed/ });
+    await waitFor(() => expect(tab).toHaveTextContent('1'));
+    fireEvent.click(tab);
+    expect(await screen.findByText('D-DONE')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('D-MINE')).not.toBeInTheDocument());   // the table drops rows a moment later
+  });
 
   it('"Your cases" lists every case that is yours, including ones you already decided', async () => {
     api();
@@ -197,7 +215,7 @@ describe('Your cases and Ready to decide', () => {
     api();
     mount(<DisputeQueuePage />, '/queue');
     await screen.findByText('D-FREE');
-    expect(screen.getByText('Owner: Someone Else')).toBeInTheDocument();
+    expect(screen.getByText('Someone Else')).toBeInTheDocument();                       // in the Owner column
     expect(screen.getAllByText('Yours').length).toBeGreaterThan(0);
     expect(screen.getByText('Unassigned')).toBeInTheDocument();
     // The manager hands cases out. An investigator asks, they don't pick.
@@ -238,13 +256,13 @@ describe('Sidebar', () => {
     expect(nav.queryByRole('link', { name: /High profile/ })).not.toBeInTheDocument();
   });
 
-  it('a manager also gets High profile, Manager review and Team, and still has Your cases', async () => {
+  it('a manager also gets High profile, Manager review and Team, but owns no cases so has no Your cases', async () => {
     asManager(); shell();
     const nav = within(screen.getByLabelText('Primary'));
     expect(nav.getByRole('link', { name: /Manager review/ })).toHaveAttribute('href', '/manager');
     expect(nav.getByRole('link', { name: /^Team/ })).toHaveAttribute('href', '/team');
     expect(nav.getByRole('link', { name: /High profile/ })).toHaveAttribute('href', '/queue?view=high');
-    expect(nav.getByRole('link', { name: /Your cases/ })).toHaveAttribute('href', '/queue?view=mine');   // the cases the manager owns
+    expect(nav.queryByRole('link', { name: /Your cases/ })).not.toBeInTheDocument();   // the manager assigns cases, they don't hold any
     expect(nav.getByRole('link', { name: /^Disputes/ })).toHaveAttribute('href', '/queue');              // and the list of everything
     expect(nav.getByRole('link', { name: /Patterns/ })).toBeInTheDocument();
     expect(screen.getByText('PayPal')).toBeInTheDocument();
@@ -359,22 +377,10 @@ describe('Case page', () => {
     expect(screen.queryByRole('button', { name: /^Take action$/ })).not.toBeInTheDocument();
   });
 
-  it('one side saying settled is not settled', async () => {
-    api(dispute({ seller_settled_at: '2026-01-02T10:00:00' }));
-    page();
-    const note = await screen.findByText(/says this was settled outside PayPal/);
-    expect(note.closest('div')).toHaveTextContent('It is not settled until the buyer confirms too');
-  });
-
-  it('explains how a settled and a dismissed case ended', async () => {
-    api(dispute({ status: 'CLOSED', outcome: 'SETTLED' }));
-    const { unmount } = page();
-    expect(await screen.findByText('Settled outside PayPal.', { selector: 'p.font-medium' })).toBeInTheDocument();
-    expect(screen.getByText(/both confirmed they settled it outside PayPal/)).toBeInTheDocument();
-    unmount();
+  it('shows a dismissed case as dismissed in the header, with no separate decision block', async () => {
     api(dispute({ status: 'CLOSED', outcome: 'DISMISSED' }));
     page();
-    expect(await screen.findByText('Dismissed, buyer withdrew.', { selector: 'p.font-medium' })).toBeInTheDocument();
-    expect(screen.getByText(/withdrew the claim/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/Dismissed/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Decision')).not.toBeInTheDocument();
   });
 });

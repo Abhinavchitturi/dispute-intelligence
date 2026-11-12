@@ -125,6 +125,25 @@ class StrikeService:
         db.commit()
         return user
 
+    @classmethod
+    def reset_strikes(cls, db: Session, user: User, manager: str, note: Optional[str]) -> int:
+        """A manager can wipe an investigator's strikes at any time. The investigator is unblocked if they were, and the open strike alerts are sorted."""
+        now = datetime.utcnow()
+        n = 0
+        for s in db.query(Strike).filter(Strike.user_id == user.id, Strike.voided_at.is_(None)).all():
+            s.voided_at, s.voided_by, s.void_reason = now, manager, "Reset by a manager"
+            n += 1
+        if user.is_blocked:
+            user.is_blocked, user.blocked_at, user.blocked_reason = False, None, None
+        for a in db.query(ManagerAlert).filter(ManagerAlert.user_id == user.id, ManagerAlert.kind.in_(["STRIKES", "BLOCKED"]), ManagerAlert.status == "OPEN").all():
+            a.status, a.sorted_by, a.sorted_at, a.sorted_note = "SORTED", manager, now, "Strikes reset"
+        why = f" Note: {note.strip()}" if note and note.strip() else ""
+        cls.notify(db, user.id, "STRIKES_RESET", "Your strikes were reset", f"{manager} reset your strikes to zero.{why}")
+        AuditService.record_event(db=db, actor=manager, action="STRIKES_RESET", status="SUCCESS", source="synthetic",
+                                  result_summary=f"Reset {n} strike{'s' if n != 1 else ''} for {user.display_name}.{why}")
+        db.commit()
+        return n
+
     # ---------- the hourly ping ----------
     @classmethod
     def remind_due(cls, db: Session, now: Optional[datetime] = None) -> int:

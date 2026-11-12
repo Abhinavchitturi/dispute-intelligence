@@ -103,21 +103,11 @@ def test_admin_can_reopen_a_decided_case():
     assert d["status"] == "UNDER_REVIEW" and d["outcome"] is None
 
 
-# ---------- settled and dismissed ----------
-def test_one_side_saying_settled_is_not_settled():
-    r = _declare("DEMO-DSP-1042", "SELLER", "SETTLED")
-    assert r.status_code == 200
-    d = _dispute("DEMO-DSP-1042")
-    assert d["status"] not in ("CLOSED", "RESOLVED") and d["outcome"] is None and d["seller_settled_at"]
-    notices = [m for m in client.get("/api/disputes/DEMO-DSP-1042/messages").json() if m["action_type"] == "SETTLEMENT_NOTICE"]
-    assert len(notices) == 1 and notices[0]["counterparty"] == "BUYER"
-    assert _declare("DEMO-DSP-1042", "SELLER", "SETTLED").status_code == 400  # saying it twice changes nothing
-
-
-def test_both_sides_saying_settled_settles_the_case():
-    assert _declare("DEMO-DSP-1042", "BUYER", "SETTLED").status_code == 200
-    d = _dispute("DEMO-DSP-1042")
-    assert d["status"] == "CLOSED" and d["outcome"] == "SETTLED"
+# ---------- dismissed ----------
+def test_settling_outside_paypal_is_no_longer_a_thing():
+    assert _declare("DEMO-DSP-1042", "SELLER", "SETTLED").status_code == 400
+    assert _declare("DEMO-DSP-1042", "BUYER", "SETTLED").status_code == 400
+    assert _dispute("DEMO-DSP-1042")["outcome"] is None
 
 
 def test_only_the_buyer_can_withdraw_and_it_dismisses_the_case():
@@ -178,13 +168,13 @@ def test_claim_points_pick_up_what_the_buyer_says():
 
 # ---------- ownership ----------
 def test_assign_and_filter_your_cases():
-    r = client.post("/api/disputes/DEMO-DSP-1051/assign", json={"assignee": "Abhinav Chitturi"})
-    assert r.status_code == 200
+    from backend.tests.helpers import set_owner
+    set_owner("DEMO-DSP-1051", "Abhinav Chitturi")
     mine = client.get("/api/disputes", params={"assigned_to": "Abhinav Chitturi"}).json()
     assert "DEMO-DSP-1051" in {d["id"] for d in mine} and all(d["assigned_to"] == "Abhinav Chitturi" for d in mine)
     summary = client.get("/api/dashboard/summary", params={"assignee": "Abhinav Chitturi"}).json()
     assert summary["my_cases_count"] >= 1
-    assert client.post("/api/disputes/DEMO-DSP-1051/assign", json={"assignee": None}).json()["assigned_to"] is None
+    set_owner("DEMO-DSP-1051", None)
 
 
 # ---------- previews ----------
@@ -217,6 +207,7 @@ def test_missing_evidence_has_no_preview():
 
 
 def test_deciding_a_case_nobody_owned_makes_it_yours():
-    client.post("/api/disputes/DEMO-DSP-1048/assign", json={"assignee": None})
+    from backend.tests.helpers import set_owner
+    set_owner("DEMO-DSP-1048", None)
     assert _propose("DEMO-DSP-1048").status_code == 200
     assert _dispute("DEMO-DSP-1048")["assigned_to"] == "Abhinav Chitturi"

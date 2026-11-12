@@ -28,26 +28,29 @@ function PreviewFrame({ evidenceId, label }: { evidenceId: string; label: string
 export function EvidenceRow({ line }: { line: EvidenceLine }) {
   const [previewing, setPreviewing] = useState(false);
   const missing = line.status === 'MISSING';
+  const doubtful = !missing && !!line.concern;
   const Icon = fileIcon(line.content_type);
   return (
     <li
       data-status={line.status}
-      className={cn('rounded-xl border px-3.5 py-3', missing ? 'border-red-500/30 bg-red-500/[.07]' : 'border-line bg-raised/40')}
+      className={cn('rounded-xl border px-3.5 py-3', missing ? 'border-red-500/30 bg-red-500/[.07]' : doubtful ? 'border-amber-400/40 bg-amber-400/[.07]' : 'border-line bg-raised/40')}
     >
       <div className="flex items-start gap-2.5">
         {missing
           ? <AlertCircle aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+          : doubtful ? <AlertCircle aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
           : <CheckCircle2 aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="min-w-0 text-[14px] font-medium text-white">{line.label}</span>
-            <span className={cn('shrink-0 whitespace-nowrap text-xs font-semibold', missing ? 'text-red-400' : 'text-emerald-400')}>{missing ? 'Missing' : 'Received'}</span>
+            <span className={cn('shrink-0 whitespace-nowrap text-xs font-semibold', missing ? 'text-red-400' : doubtful ? 'text-amber-400' : 'text-emerald-400')}>{missing ? 'Missing' : doubtful ? 'Received, doubtful' : 'Received'}</span>
           </div>
           {missing ? (
             <p className="mt-0.5 text-[13px] text-red-300/90">{line.detail || 'Not on file.'}</p>
           ) : (
             <>
               {line.description && <p className="mt-0.5 text-[13px] text-slate-300">{line.description}</p>}
+              {doubtful && <p className="mt-1.5 text-[13px] font-medium text-amber-300">{line.concern}</p>}
               {line.file_name && (
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-white/[.04] px-2.5 py-1.5 text-xs text-slate-300">
                   <Icon aria-hidden className="h-3.5 w-3.5 text-muted" />

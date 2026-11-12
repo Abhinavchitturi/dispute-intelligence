@@ -18,6 +18,10 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def quiet(monkeypatch):
     monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
+    # These tests are about the clock and the AI Agent, so the round that assigns new cases is switched off here
+    # (test_assignment.py covers it), except where a test turns it back on.
+    from backend.app.services import assignment_service
+    monkeypatch.setattr(assignment_service, "auto_assign", lambda db, disputes=None: 0)
     case_clock.reset_throttle()
 
 
@@ -94,62 +98,25 @@ def test_unassigned_cases_are_listed_most_urgent_first():
     assert client.get("/api/dashboard/summary").json()["unassigned_count"] >= 3
 
 
-# ---------- nobody took it: the AI Agent does ----------
-def test_an_unassigned_case_past_its_deadline_goes_to_the_ai_agent_and_the_manager_is_alerted():
+# ---------- nobody took it: an investigator does, never the AI Agent ----------
+def test_an_unassigned_case_is_never_handed_to_the_ai_agent_even_past_its_deadline():
     did = "DEMO-DSP-1046"
-    _set(did, assigned_to=None, response_due_date=datetime.utcnow() - timedelta(hours=1), ai_owned=False)
+    _set(did, assigned_to=None, response_due_date=datetime.utcnow() - timedelta(hours=1), ai_owned=False, created_at=datetime.utcnow() - timedelta(hours=3))
     out = _tick()
-    assert out["handed_to_ai"] >= 1
+    assert "handed_to_ai" not in out
     d = _case(did)
-    assert d["assigned_to"] == "AI Agent" and d["ai_owned"] is True and d["ai_owned_at"]
-    alert = next(a for a in _alerts("AI_TAKEOVER") if a["dispute_id"] == did)
-    assert "AI Agent took DEMO-DSP-1046" in alert["title"] and "handling the whole case" in alert["body"]
-    assert alert["status"] == "OPEN"                                                 # pinned for the manager until they press Sorted, like the other alerts
-    assert any(e["action"] == "HANDED_TO_AI" for e in client.get("/api/audit-events", params={"dispute_id": did}).json())
-    assert client.get("/api/dashboard/summary").json()["ai_owned_count"] >= 1
-    # Running it again changes nothing, and does not raise a second alert.
-    assert _tick()["handed_to_ai"] == 0
-    assert len([a for a in _alerts("AI_TAKEOVER") if a["dispute_id"] == did]) == 1
+    assert d["ai_owned"] is False and d["assigned_to"] is None                      # still inside the manager's two days, and not the AI's either
+    assert not [a for a in _alerts("AI_TAKEOVER") if a["dispute_id"] == did]
 
 
-def test_a_case_before_its_deadline_or_already_owned_or_closed_is_left_alone():
-    _set("DEMO-DSP-1048", assigned_to=None, response_due_date=datetime.utcnow() + timedelta(hours=2), ai_owned=False)   # still has time
-    _set("DEMO-DSP-1050", assigned_to="Susmitha", response_due_date=datetime.utcnow() - timedelta(hours=9), ai_owned=False)  # overdue but someone has it
-    _tick()
-    assert _case("DEMO-DSP-1048")["ai_owned"] is False and _case("DEMO-DSP-1048")["assigned_to"] is None
-    assert _case("DEMO-DSP-1050")["assigned_to"] == "Susmitha" and _case("DEMO-DSP-1050")["ai_owned"] is False
-    closed = client.get("/api/disputes", params={"status": "RESOLVED"}).json()[0]["id"]
-    _set(closed, assigned_to=None)
-    _tick()
-    assert _case(closed)["ai_owned"] is False
-
-
-def test_a_case_with_no_deadline_is_never_handed_over():
-    _set("DEMO-DSP-1051", assigned_to=None, response_due_date=None, ai_owned=False)
-    _tick()
-    assert _case("DEMO-DSP-1051")["ai_owned"] is False
-
-
-def test_a_late_look_at_the_cases_hands_them_over_without_waiting_for_the_timer():
-    _set("DEMO-DSP-1053", assigned_to=None, response_due_date=datetime.utcnow() - timedelta(minutes=5), ai_owned=False)
+def test_a_case_without_an_owner_goes_to_an_investigator_on_the_next_round_never_to_the_ai(monkeypatch):
+    monkeypatch.undo()                      # this one is about assignment, so it runs for real
     case_clock.reset_throttle()
-    client.get("/api/dashboard/summary")
-    assert _case("DEMO-DSP-1053")["ai_owned"] is True
-
-
-def test_the_manager_can_take_a_case_back_from_the_ai_agent():
-    did = "DEMO-DSP-1046"
-    assert _case(did)["ai_owned"] is True
-    assert client.post(f"/api/disputes/{did}/assign", json={"assignee": "Jahnavi"}).status_code == 200
+    did = "DEMO-DSP-1053"
+    _set(did, assigned_to=None, response_due_date=datetime.utcnow() - timedelta(days=1), ai_owned=False, created_at=datetime.utcnow() - timedelta(days=6))
+    _tick()
     d = _case(did)
-    assert d["assigned_to"] == "Jahnavi" and d["ai_owned"] is False and d["ai_owned_at"] is None
-    # It is theirs now. The AI Agent can no longer act on it.
-    settings.AI_AGENT_API_KEY = "k"
-    try:
-        r = client.post(f"/api/ai-agent/cases/{did}/decide", headers={"X-AI-Agent-Key": "k"}, json={"outcome": "BUYER_FAVOR", "rationale": "x"})
-        assert r.status_code == 400 and "isn't with the AI Agent" in r.json()["detail"]
-    finally:
-        settings.AI_AGENT_API_KEY = None
+    assert d["assigned_to"] in ("Abhinav Chitturi", "Susmitha", "Jahnavi") and d["ai_owned"] is False
 
 
 # ---------- what the AI Agent can do with a case it owns ----------
@@ -160,8 +127,8 @@ def agent(monkeypatch):
 
 
 def _hand(did):
-    _set(did, assigned_to=None, response_due_date=datetime.utcnow() - timedelta(hours=2), ai_owned=False)
-    _tick()
+    """Puts a case with the AI Agent directly. Nothing hands cases over by itself any more, but the Agent's own endpoints still work on one."""
+    _set(did, assigned_to="AI Agent", response_due_date=datetime.utcnow() - timedelta(hours=2), ai_owned=True, ai_owned_at=datetime.utcnow())
     assert _case(did)["ai_owned"] is True
 
 
@@ -196,7 +163,7 @@ def test_the_agent_decides_the_whole_case_and_everyone_is_told(agent):
     assert {m["counterparty"] for m in client.get(f"/api/disputes/{did}/messages").json() if m["action_type"] == "DECIDE_FOR_BUYER"} == {"SELLER", "BUYER"}
     assert {e["party"] for e in client.get(f"/api/disputes/{did}/emails").json() if e["direction"] == "OUT"} == {"SELLER", "BUYER"}
     assert not any(a["dispute_id"] == did for a in client.get("/api/alerts").json() if a["kind"] == "STRIKES")      # no investigator, so no strike
-    assert all(t["strikes"] == 0 for t in client.get("/api/team").json())
+    assert not any(h["dispute_id"] == did for t in client.get("/api/team").json() for h in t["history"])
     assert client.post(f"/api/ai-agent/cases/{did}/decide", headers=agent, json={"outcome": "SELLER_FAVOR", "rationale": "Again."}).status_code == 400   # already decided
 
 

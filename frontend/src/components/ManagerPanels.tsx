@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Bot, Check, RotateCcw, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { ArrowRight, Bot, Check, RotateCcw, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { managerReview, resolveFlag, reviseDecision } from '../api/client';
 import { CaseFlag, DisputeSummary } from '../types';
 import { Badge, Button, Field, Textarea, useToast } from './ui/kit';
@@ -133,55 +133,52 @@ export function ReviseDecision({ dispute, compact = false }: { dispute: DisputeS
   );
 }
 
-/** An investigator's flag that the AI got a case wrong. The manager sides with the AI, or overturns it. */
-export function FlagCard({ flag }: { flag: CaseFlag }) {
+/** The manager's two choices on a conflict: the investigator is right (train the AI), or the AI is right. Lives on the case page, next to the evidence. */
+export function FlagActions({ flag }: { flag: CaseFlag }) {
   const toast = useToast();
   const refresh = useRefresh();
   const [note, setNote] = useState('');
-  const [asking, setAsking] = useState<'UPHOLD_AI' | 'OVERTURN' | null>(null);
+  const [asking, setAsking] = useState(false);
   const resolve = useMutation({
-    mutationFn: (action: 'UPHOLD_AI' | 'OVERTURN') => resolveFlag(flag.id, action, note.trim()),
-    onSuccess: (f) => { toast('success', f.status === 'OVERTURNED' ? 'The AI was overturned. Your correction is saved for the AI team.' : 'The AI decision stands.'); setAsking(null); setNote(''); refresh(); },
+    mutationFn: (action: 'UPHOLD_AI' | 'OVERTURN') => resolveFlag(flag.id, action, action === 'OVERTURN' ? `The AI got this wrong. The investigator's case, checked and confirmed: ${flag.points}` : note.trim()),
+    onSuccess: (f) => { toast('success', f.status === 'OVERTURNED' ? 'The AI has been trained on this case. The strike is removed.' : 'The AI decision stands.'); setAsking(false); setNote(''); refresh(); },
     onError: (e: Error) => toast('error', e.message),
   });
+  if (flag.status !== 'OPEN') return null;
+  return asking ? (
+    <div className="space-y-2">
+      <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} aria-label={`Your reasons for ${flag.dispute_id}`} placeholder="Why the AI was right. The investigator will see this." />
+      <div className="flex gap-2">
+        <Button size="sm" variant="primary" loading={resolve.isPending} disabled={note.trim().length < 10} onClick={() => resolve.mutate('UPHOLD_AI')}>Keep the AI decision</Button>
+        <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>Cancel</Button>
+      </div>
+    </div>
+  ) : (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="primary" loading={resolve.isPending} onClick={() => resolve.mutate('OVERTURN')}><RotateCcw className="h-3.5 w-3.5" />Overturn decision</Button>
+      <Button size="sm" onClick={() => setAsking(true)}>Keep the AI decision</Button>
+      <span className="text-xs text-muted">Overturn if the investigator is right: the decision changes to theirs, both sides are told, the strike comes off and the AI learns from it.</span>
+    </div>
+  );
+}
+
+/** One line per conflict. The detail, the evidence and the buttons are on the case itself. */
+export function FlagCard({ flag }: { flag: CaseFlag }) {
+  const navigate = useNavigate();
   const mine = outcomeMeta(flag.investigator_outcome);
   const ai = outcomeMeta(flag.ai_outcome);
+  const overdue = flag.status === 'OPEN' && flag.due_at && new Date(flag.due_at) < new Date();
   return (
     <article className="rounded-2xl border border-line bg-raised/40 p-4" aria-label={`Flag on ${flag.dispute_id}`}>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="font-mono font-semibold text-white">{flag.dispute_id}</span>
         <Badge tone={flag.status === 'OPEN' ? 'warn' : flag.status === 'OVERTURNED' ? 'success' : 'neutral'}>{flag.status === 'OPEN' ? 'Open' : flag.status === 'OVERTURNED' ? 'AI overturned' : 'AI upheld'}</Badge>
         <span className="text-xs text-muted">raised by {flag.raised_by}</span>
-        {flag.status === 'OPEN' && flag.due_at && <span className={`text-xs ${new Date(flag.due_at) < new Date() ? 'text-rose-300' : 'text-muted'}`}>settle by {new Date(flag.due_at).toLocaleDateString()}{new Date(flag.due_at) < new Date() ? ' (overdue)' : ''}</span>}
-        <Link to={`/investigate/${flag.dispute_id}`} className="ml-auto text-xs text-brand-soft hover:underline">Open the case and its evidence</Link>
+        {flag.status === 'OPEN' && flag.due_at && <span className={cn('text-xs', overdue ? 'text-rose-300' : 'text-muted')}>settle by {new Date(flag.due_at).toLocaleDateString()}{overdue ? ' (overdue)' : ''}</span>}
       </div>
-      <dl className="mt-3 grid gap-3 text-[13px] sm:grid-cols-2">
-        <div><dt className="text-xs uppercase tracking-wider text-muted">The investigator decided</dt><dd className="mt-1 text-white">{mine?.label ?? '—'}</dd></div>
-        <div><dt className="text-xs uppercase tracking-wider text-muted">The AI decided</dt><dd className="mt-1 text-white">{ai?.label ?? '—'}</dd></div>
-      </dl>
-      {flag.ai_rationale && <p className="mt-3 text-[13px] text-slate-300"><span className="text-muted">AI's reasons: </span>{flag.ai_rationale}</p>}
-      <p className="mt-3 rounded-xl bg-white/[.04] p-3 text-[13px] text-slate-200"><span className="text-muted">Investigator says: </span>{flag.points}</p>
-      {flag.status !== 'OPEN' && flag.resolution_note && <p className="mt-3 text-[13px] text-slate-300"><span className="text-muted">{flag.resolved_by}: </span>{flag.resolution_note}</p>}
-      {flag.status === 'OPEN' && (
-        <div className="mt-4 space-y-3">
-          {asking ? (
-            <>
-              <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} aria-label={`Your reasons for ${flag.dispute_id}`} placeholder={asking === 'OVERTURN' ? 'What the AI got wrong. This is what it learns from.' : 'Why the AI was right.'} />
-              <div className="flex gap-2">
-                <Button size="sm" variant="primary" loading={resolve.isPending} disabled={note.trim().length < 10} onClick={() => resolve.mutate(asking)}>
-                  {asking === 'OVERTURN' ? 'Overturn the AI' : 'Keep the AI decision'}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setAsking(null)}>Cancel</Button>
-              </div>
-            </>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="primary" onClick={() => setAsking('OVERTURN')}>Overturn the AI</Button>
-              <Button size="sm" onClick={() => setAsking('UPHOLD_AI')}>Keep the AI decision</Button>
-            </div>
-          )}
-        </div>
-      )}
+      <p className="mt-2 text-[13px] text-slate-300">{flag.raised_by} decided in {mine?.label.toLowerCase() ?? 'a side'}. The AI ruled in {ai?.label.toLowerCase() ?? 'the other'}.</p>
+      {flag.status !== 'OPEN' && flag.resolution_note && <p className="mt-2 text-[13px] text-slate-300"><span className="text-muted">{flag.resolved_by}: </span>{flag.resolution_note}</p>}
+      {flag.status === 'OPEN' && <Button size="sm" variant="primary" className="mt-3" onClick={() => navigate(`/investigate/${flag.dispute_id}`)}>Open case details<ArrowRight className="h-3.5 w-3.5" /></Button>}
     </article>
   );
 }

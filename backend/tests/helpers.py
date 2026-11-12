@@ -8,3 +8,15 @@ def decide(client, dispute_id: str, outcome: str = "SELLER_FAVOR", reason: str =
     r = client.post(f"/api/disputes/{dispute_id}/admin-review", json={"action": "APPROVE", "reviewer": "PayPal", "role": "MANAGER"})
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def set_owner(dispute_id: str, name):
+    """Puts a case with someone (or with nobody) for a test. Cases are assigned automatically in the app; tests set it directly."""
+    from backend.app.database import SessionLocal
+    from backend.app.models.dispute import Dispute
+    db = SessionLocal()
+    try:
+        db.get(Dispute, dispute_id).assigned_to = name
+        db.commit()
+    finally:
+        db.close()

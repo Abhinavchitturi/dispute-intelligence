@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, MemoryRouter, useLocation } from 'react-router-dom';
 
@@ -160,6 +160,71 @@ describe('ResolveIQ Page Components Suite', () => {
     expect(screen.getByTestId('loc')).toHaveTextContent(/^\/\?open=DEMO-DSP-1042$/); // still on the list
   });
 
+  it('syncs PayPal disputes into the queue', async () => {
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/integrations/paypal/sync')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ created: 1, updated: 0, total: 1, message: 'Imported 1 new PayPal Sandbox dispute.' })
+        });
+      }
+      if (url.includes('/api/disputes')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([disputeFixture]) });
+      }
+      return Promise.reject(new Error(`Unhandled url: ${url}`));
+    });
+
+    renderWithProviders(<DisputeQueuePage />);
+    await screen.findByText('DEMO-DSP-1042');
+    fireEvent.click(screen.getByRole('button', { name: /Sync PayPal/i }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/integrations/paypal/sync', { method: 'POST' });
+      expect(global.fetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it('imports a PayPal case by the ID the buyer was given, and opens it', async () => {
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/integrations/paypal/import/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({
+          dispute_id: 'PAYPAL-PP-R-VQH-10198755', created: true, new_messages: 1, new_evidence: 1, message: 'Imported PayPal case PP-R-VQH-10198755.' }) });
+      }
+      if (url.includes('/api/disputes/PAYPAL-PP-R-VQH-10198755')) {  // the preview that opens afterwards reads one case
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ...disputeFixture, id: 'PAYPAL-PP-R-VQH-10198755', source: 'paypal_sandbox' }) });
+      }
+      if (url.includes('/api/disputes')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([disputeFixture]) });
+      }
+      return Promise.reject(new Error(`Unhandled url: ${url}`));
+    });
+
+    renderWithProviders(<DisputeQueuePage />);
+    await screen.findByText('DEMO-DSP-1042');
+    fireEvent.click(screen.getByRole('button', { name: /Import case/i }));
+    const importButton = screen.getByRole('button', { name: /^Import$/ });
+    expect(importButton).toBeDisabled();                       // nothing typed yet
+    fireEvent.change(screen.getByLabelText('PayPal case ID'), { target: { value: ' pp-r-vqh-10198755 ' } });
+    fireEvent.click(importButton);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/integrations/paypal/import/PP-R-VQH-10198755', { method: 'POST' });
+      expect(screen.getByTestId('loc')).toHaveTextContent('open=PAYPAL-PP-R-VQH-10198755');
+    });
+  });
+
+  it('shows the queue as a sortable, filterable table with a CSV download', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([disputeFixture]) });
+    renderWithProviders(<DisputeQueuePage />);
+    await screen.findByText('DEMO-DSP-1042');
+    const table = screen.getByLabelText('Disputes table');
+    for (const header of ['Priority', 'Case', 'Buyer vs seller', 'Status', 'Amount', 'Decide by', 'Owner']) {
+      expect(within(table).getByText(header)).toBeInTheDocument();
+    }
+    expect(table.querySelectorAll('.ag-floating-filter').length).toBeGreaterThan(5);   // a filter box under each column
+    await waitFor(() => expect(screen.getByRole('button', { name: /Download the table as CSV/ })).toBeEnabled());
+  });
+
   it('clicking a dispute opens it in Investigation', async () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([disputeFixture, { ...disputeFixture, id: 'DEMO-DSP-2000', priority_score: 20 }]) });
     renderWithProviders(<DisputeQueuePage />);
@@ -196,7 +261,7 @@ describe('ResolveIQ Page Components Suite', () => {
               reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
               case_summary: 'INR claim where tracking showed delivered, address verification unknown.',
               evidence_attributes: { tracking_status: 'DELIVERED', address_match: 'unknown' },
-              outcome: 'SETTLED',
+              outcome: 'BUYER_FAVOR',
               amount: 450.0,
               currency: 'USD'
             }
@@ -212,7 +277,7 @@ describe('ResolveIQ Page Components Suite', () => {
       expect(screen.getByText(/Historical Precedent Explorer/i)).toBeInTheDocument();
       expect(screen.getByText('HIST-CASE-203')).toBeInTheDocument();
       expect(screen.getByText(/INR claim where tracking showed delivered/i)).toBeInTheDocument();
-      expect(screen.getAllByText('Settled').length).toBeGreaterThan(1); // filter option + outcome badge
+      expect(screen.queryByText('Settled')).not.toBeInTheDocument(); // no settled option or badge
     });
   });
 

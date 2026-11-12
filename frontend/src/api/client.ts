@@ -32,6 +32,33 @@ import {
 
 const API_BASE = '/api';
 
+export interface KeyEvidence {
+  supporting_evidence: string[];
+  contradicting_evidence: string[];
+}
+
+export interface AIReviewAssessment {
+  ai_verdict: 'AGREES' | 'DISAGREES' | 'INCONCLUSIVE';
+  ai_decision: 'FULFILL_BUYER' | 'FULFILL_SELLER' | 'INSUFFICIENT_EVIDENCE' | 'DISMISS_NO_RESPONSE';
+  reasoning: string;
+  key_evidence: KeyEvidence;
+  investigator_comparison: string;
+  evidence_gaps: string;
+  model: string;
+  provider: string;
+
+  // Backward compatibility fields
+  verdict?: 'AGREE' | 'DISAGREE' | 'INCONCLUSIVE';
+  agrees?: boolean | null;
+  assessment?: string;
+  explanation?: string;
+  timeline_analysis?: string[];
+  contradictions?: string[];
+  missing_evidence?: string[];
+  key_evidence_analyzed?: string[];
+  recommendation?: string;
+}
+
 export async function fetchDashboardSummary(assignee?: string): Promise<DashboardSummary> {
   const res = await fetch(`${API_BASE}/dashboard/summary${assignee ? `?assignee=${encodeURIComponent(assignee)}` : ''}`);
   if (!res.ok) throw new Error(`Failed to fetch dashboard summary: ${res.statusText}`);
@@ -140,6 +167,24 @@ export async function fetchIntegrationStatus(): Promise<IntegrationStatus> {
 export async function testPayPalConnectivity(): Promise<any> {
   const res = await fetch(`${API_BASE}/integrations/paypal/test`, { method: 'POST' });
   return res.json();
+}
+
+export async function syncPayPalDisputes(): Promise<{ created: number; updated: number; total: number; message: string }> {
+  const res = await fetch(`${API_BASE}/integrations/paypal/sync`, { method: 'POST' });
+  const payload = await res.json();
+  if (!res.ok) {
+    throw new Error(payload.detail || `Failed to sync PayPal disputes: ${res.statusText}`);
+  }
+  return payload;
+}
+
+export async function importPayPalCase(caseId: string): Promise<{ dispute_id: string; created: boolean; new_messages: number; new_evidence: number; message: string }> {
+  const res = await fetch(`${API_BASE}/integrations/paypal/import/${encodeURIComponent(caseId)}`, { method: 'POST' });
+  const payload = await res.json();
+  if (!res.ok) {
+    throw new Error(payload.detail || `Failed to import PayPal case: ${res.statusText}`);
+  }
+  return payload;
 }
 
 export async function testAIConnectivity(): Promise<any> {
@@ -256,6 +301,11 @@ export async function fetchEvidenceSummary(disputeId: string): Promise<EvidenceS
   return res.json();
 }
 
+/** Independently analyzes the dispute against the investigator's selected decision and reasoning. */
+export function requestAiReview(disputeId: string, payload: { proposed_outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR'; proposed_reason: string }): Promise<AIReviewAssessment> {
+  return post<AIReviewAssessment>(`/disputes/${disputeId}/ai-review`, payload, 'Failed to generate AI review');
+}
+
 /** The investigator's call. It goes to an admin; nobody is told until the admin confirms. */
 export function submitDecision(disputeId: string, payload: { outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR'; reason: string }) {
   return post<{ message: string; status: string }>(`/disputes/${disputeId}/decision`, { ...payload, confirmed: true }, 'Failed to submit the decision');
@@ -265,11 +315,8 @@ export function managerReview(disputeId: string, payload: { action: 'APPROVE' | 
   return post<{ message: string; status: string }>(`/disputes/${disputeId}/admin-review`, payload, 'Failed to review the decision');
 }
 
-export function assignDispute(disputeId: string, assignee: string | null) {
-  return post<{ assigned_to: string | null }>(`/disputes/${disputeId}/assign`, { assignee }, 'Failed to update the owner of this case');
-}
 
-export function declareFromParty(disputeId: string, party: 'SELLER' | 'BUYER', kind: 'SETTLED' | 'WITHDRAWN') {
+export function declareFromParty(disputeId: string, party: 'SELLER' | 'BUYER', kind: 'WITHDRAWN') {
   return post<DisputeMessage>(`/disputes/${disputeId}/parties/${party}/declare`, { kind }, 'Failed to record that');
 }
 
@@ -306,9 +353,10 @@ export const fetchNotifications = () => get<Notifications>('/notifications', 'Fa
 export const markNotificationsRead = () => post<{ marked_read: number }>('/notifications/read', {}, 'Failed to mark read');
 export const sortAlert = (id: string, note?: string) => post<ManagerAlert>(`/alerts/${id}/sorted`, { note }, 'Failed to mark this sorted');
 export const fetchTeam = () => get<TeamMember[]>('/team', 'Failed to load the team');
+export const resetStrikes = (id: string, note?: string) => post<{ success: boolean; cleared: number }>(`/team/${id}/reset-strikes`, { note }, 'Failed to reset the strikes');
 export const unblockUser = (id: string, note?: string) => post<{ success: boolean }>(`/team/${id}/unblock`, { note }, 'Failed to unblock');
 export const fetchFlags = (status?: string, disputeId?: string) => get<CaseFlag[]>(`/flags?${new URLSearchParams({ ...(status ? { status } : {}), ...(disputeId ? { dispute_id: disputeId } : {}) })}`, 'Failed to load flags');
-export const raiseFlag = (disputeId: string, points: string) => post<{ flag_id: string }>(`/disputes/${disputeId}/flag`, { points }, 'Failed to raise the flag');
+export const raiseFlag = (disputeId: string, points: string) => post<{ flag_id: string; auto_closed?: boolean }>(`/disputes/${disputeId}/flag`, { points }, 'Failed to raise the flag');
 export const resolveFlag = (id: string, action: 'UPHOLD_AI' | 'OVERTURN', note: string) => post<CaseFlag>(`/flags/${id}/resolve`, { action, note }, 'Failed to resolve the flag');
 export const reviseDecision = (disputeId: string, outcome: string, note: string) => post<{ outcome: string }>(`/disputes/${disputeId}/revise`, { outcome, note }, 'Failed to overturn the decision');
 export const fetchTraining = () => get<TrainingRow[]>('/ai-training', 'Failed to load the AI feedback');
@@ -334,11 +382,6 @@ export const updateUser = (id: string, changes: { display_name?: string; email?:
 export const resetPassword = (id: string, password: string) => post<{ success: boolean }>(`/users/${id}/password`, { password }, 'Failed to reset the password');
 export const blockUser = (id: string, reason: string) => post<ManagedUser>(`/users/${id}/block`, { reason }, 'Failed to block the user');
 
-export const fetchDistributionPlan = () => get<DistributionPlan>('/cases/distribution', 'Failed to load the cases waiting');
-export const distributeCases = (p: { counts?: Record<string, number>; investigator_ids?: string[]; per_person?: number; include_high_profile?: boolean }) => post<DistributionResult>('/cases/distribute', p, 'Failed to hand out the cases');
-export const fetchCaseRequests = (status?: string) => get<CaseRequest[]>(`/case-requests${status ? `?status=${status}` : ''}`, 'Failed to load case requests');
-export const requestCases = (note?: string) => post<CaseRequest>('/case-requests', { note }, 'Failed to ask for cases');
-export const declineCaseRequest = (id: string, note: string) => post<CaseRequest>(`/case-requests/${id}/decline`, { note }, 'Failed to decline');
 
 export const recordReply = (disputeId: string, messageId: string, provided: { evidence_type: string; file_name?: string }[], note?: string) =>
   post<DisputeMessage>(`/disputes/${disputeId}/replies/${messageId}/record`, { provided, note }, 'Failed to record the reply');
@@ -355,3 +398,9 @@ export async function unshareCase(disputeId: string, userId: string): Promise<vo
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Failed to take them off the case');
   }
 }
+
+export const dismissNoResponse = (disputeId: string) =>
+  post<{ message: string }>(`/disputes/${disputeId}/dismiss-no-response`, {}, "Couldn't dismiss the case");
+
+export const fetchAiRuling = (disputeId: string) =>
+  get<{ available: boolean; assessment?: AIReviewAssessment }>(`/disputes/${disputeId}/ai-ruling`, "Couldn't load the AI's analysis");

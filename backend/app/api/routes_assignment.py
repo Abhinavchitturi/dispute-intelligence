@@ -1,4 +1,4 @@
-"""The manager hands out cases. An investigator with none can ask."""
+"""People and case sharing. Cases are assigned automatically (assignment_service.auto_assign); nobody hands them out by hand."""
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
 from backend.app.models.dispute import Dispute
-from backend.app.models.team import INVESTIGATOR, MANAGER, CaseCollaborator, CaseRequest, ManagerAlert, User
+from backend.app.models.team import INVESTIGATOR, MANAGER, CaseCollaborator, User
 from backend.app.services import assignment_service as svc
 from backend.app.services.auth_service import actor_name, case_scope, case_user, current_user, manager_user
 from backend.app.services.access import can_access
@@ -20,124 +20,6 @@ from backend.app.services.strike_service import StrikeService
 router = APIRouter(tags=["Assignment"], dependencies=[Depends(case_scope)])
 
 
-class Distribute(BaseModel):
-    investigator_ids: Optional[List[str]] = None   # none means every investigator who can take cases
-    per_person: Optional[int] = None               # none means share them out evenly
-    counts: Optional[Dict[str, int]] = None        # exactly this many cases for each person (by user id). Overrides the two above.
-    include_high_profile: bool = False
-
-
-@router.get("/cases/distribution")
-def preview(db: Session = Depends(get_db), user: Optional[User] = Depends(manager_user)):
-    """What is waiting to be handed out, and how loaded each person is now. Drives the Distribute dialog."""
-    from backend.app.services.high_profile import high_profile_filter
-    from backend.app.services.message_service import OPEN_STATUSES
-    base = db.query(Dispute).filter(Dispute.status.in_(OPEN_STATUSES), Dispute.assigned_to.is_(None))
-    return {
-        "unassigned": base.filter(~high_profile_filter()).count(),
-        "unassigned_high_profile": base.filter(high_profile_filter()).count(),
-        "people": [{"id": u.id, "name": u.display_name, "open_cases": svc.open_cases(db, u.display_name),
-                    "requested": bool(db.query(CaseRequest).filter(CaseRequest.user_id == u.id, CaseRequest.status == "OPEN").first())}
-                   for u in svc.workable_investigators(db)],
-    }
-
-
-@router.post("/cases/distribute")
-def distribute(request: Distribute, user: Optional[User] = Depends(manager_user), db: Session = Depends(get_db)):
-    if request.per_person is not None and request.per_person < 1:
-        raise HTTPException(status_code=400, detail="Give each person at least one case, or leave it blank to share evenly.")
-    if request.counts is not None:
-        if any(n < 0 for n in request.counts.values()):
-            raise HTTPException(status_code=400, detail="A person can't be given fewer than none.")
-        try:
-            return svc.distribute_counts(db, actor_name(user, "manager"), request.counts, request.include_high_profile)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-    return svc.distribute(db, actor_name(user, "manager"), request.investigator_ids, request.per_person, request.include_high_profile)
-
-
-class BulkAssign(BaseModel):
-    dispute_ids: List[str]
-    assignee_id: Optional[str] = None   # none releases them
-
-
-@router.post("/cases/assign")
-def bulk_assign(request: BulkAssign, user: Optional[User] = Depends(manager_user), db: Session = Depends(get_db)):
-    """Hand specific cases to one person."""
-    who = actor_name(user, "manager")
-    target = db.get(User, request.assignee_id) if request.assignee_id else None
-    if request.assignee_id and (target is None or target.is_active is False):
-        raise HTTPException(status_code=400, detail="That person can't be given cases.")
-    if target and target.is_blocked:
-        raise HTTPException(status_code=400, detail=f"{target.display_name} is blocked. Unblock them first.")
-    n = 0
-    for d in db.query(Dispute).filter(Dispute.id.in_(request.dispute_ids)).all():
-        if d.status in CLOSED:
-            continue
-        svc.assign_one(db, d, target, who)
-        n += 1
-    if target and n:
-        StrikeService.notify(db, target.id, "ASSIGNED", f"You have {n} new case{'s' if n != 1 else ''}", f"{who} assigned you {n} case{'s' if n != 1 else ''}.")
-        svc.settle_requests(db, target, who, n)
-    db.commit()
-    return {"assigned": n}
-
-
-# ---------- asking for cases ----------
-class AskForCases(BaseModel):
-    note: Optional[str] = None
-
-
-def _req(db: Session, r: CaseRequest) -> dict:
-    u = db.get(User, r.user_id)
-    return {"id": r.id, "user_id": r.user_id, "name": u.display_name if u else r.user_id, "note": r.note, "status": r.status, "created_at": r.created_at,
-            "resolved_by": r.resolved_by, "resolved_at": r.resolved_at, "resolution_note": r.resolution_note, "cases_given": r.cases_given}
-
-
-@router.post("/case-requests")
-def ask(request: AskForCases, user: Optional[User] = Depends(case_user), db: Session = Depends(get_db)):
-    if user is None:
-        raise HTTPException(status_code=401, detail="Sign in to continue.")
-    try:
-        return _req(db, svc.request_cases(db, user, request.note))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/case-requests")
-def list_requests(status: Optional[str] = None, user: Optional[User] = Depends(case_user), db: Session = Depends(get_db)):
-    q = db.query(CaseRequest)
-    if status:
-        q = q.filter(CaseRequest.status == status.upper())
-    if user and user.role == INVESTIGATOR:
-        q = q.filter(CaseRequest.user_id == user.id)
-    return [_req(db, r) for r in q.order_by(CaseRequest.created_at.desc()).limit(50).all()]
-
-
-class Decline(BaseModel):
-    note: str
-
-
-@router.post("/case-requests/{request_id}/decline")
-def decline(request_id: str, body: Decline, user: Optional[User] = Depends(manager_user), db: Session = Depends(get_db)):
-    r = db.get(CaseRequest, request_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Request not found.")
-    if r.status != "OPEN":
-        raise HTTPException(status_code=400, detail="This request has already been dealt with.")
-    note = body.note.strip()
-    if len(note) < 5:
-        raise HTTPException(status_code=400, detail="Say why, so they know what to do next.")
-    who = actor_name(user, "manager")
-    r.status, r.resolved_by, r.resolved_at, r.resolution_note = "DECLINED", who, datetime.utcnow(), note
-    for a in db.query(ManagerAlert).filter(ManagerAlert.kind == "REQUEST", ManagerAlert.user_id == r.user_id, ManagerAlert.status == "OPEN").all():
-        a.status, a.sorted_by, a.sorted_at, a.sorted_note = "SORTED", who, datetime.utcnow(), "Request declined"
-    StrikeService.notify(db, r.user_id, "REQUEST", "No new cases for now", f"{who}: {note}")
-    db.commit()
-    return _req(db, r)
-
-
-# ---------- sharing a case: more than one investigator on it ----------
 @router.get("/people")
 def people(user: Optional[User] = Depends(current_user), db: Session = Depends(get_db)):
     """Investigators who can be asked to help on a case. Anyone signed in can see the names."""

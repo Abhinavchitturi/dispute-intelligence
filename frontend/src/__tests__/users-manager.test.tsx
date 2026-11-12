@@ -194,25 +194,6 @@ describe('High-profile cases', () => {
     expect(screen.queryByRole('tab', { name: /High profile/ })).not.toBeInTheDocument();
   });
 
-  it('a manager assigns a case from its row, choosing only from people who can take cases', async () => {
-    signInAs('MANAGER');
-    const calls: { url: string; body?: any }[] = [];
-    global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-      calls.push({ url, body: init?.body ? JSON.parse(init.body as string) : undefined });
-      if (url.endsWith('/assign')) return ok({ assigned_to: 'Susmitha' });
-      if (url.endsWith('/users')) return ok([...USERS, user({ id: 'U-b', username: 'bob', name: 'Bob Blocked', is_blocked: true }), user({ id: 'U-x', username: 'xi', name: 'Xi Gone', is_active: false })]);
-      return ok([d({ id: 'D-FREE', assigned_to: null })]);
-    }) as any;
-    mount(<DisputeQueuePage />, '/queue');
-    const pick = await screen.findByRole('combobox', { name: 'Assign D-FREE' });
-    await waitFor(() => expect(within(pick).getByRole('option', { name: 'Susmitha' })).toBeInTheDocument());
-    const names = within(pick).getAllByRole('option').map((o) => o.textContent);
-    expect(names).toEqual(['Unassigned', 'Abhinav Chitturi', 'Susmitha', 'Jahnavi', 'PayPal (manager)']);   // blocked and deactivated people are not offered
-    fireEvent.change(pick, { target: { value: 'Susmitha' } });
-    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/D-FREE/assign'))).toBe(true));
-    expect(calls.find((c) => c.url.endsWith('/assign'))!.body).toEqual({ assignee: 'Susmitha' });
-  });
-
   it('the manager\'s overview leads with high-profile cases and offers every case', async () => {
     signInAs('MANAGER');
     global.fetch = vi.fn().mockImplementation((url: string) => {

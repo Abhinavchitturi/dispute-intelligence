@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, ArrowLeft, ArrowUpRight, Building2, CheckCircle2, ChevronDown, ChevronRight, CreditCard, FileText, Gavel, History,
-  Handshake, Lightbulb, MessageSquare, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
+  Lightbulb, MessageSquare, Package, RefreshCw, RotateCcw, Send, Sparkles, Truck, User,
 } from 'lucide-react';
 import { fetchCaseEmails, fetchDisputeDetail, fetchDisputeMessages, fetchDisputeTimeline, fetchInvestigationBrief, fetchSimilarCasesForDispute } from '../api/client';
 import { ActionWizard, ActionResult } from '../components/ActionWizard';
@@ -20,7 +20,6 @@ import { ClaimPoints } from '../components/ClaimPoints';
 import { EvidenceChecklist } from '../components/EvidenceChecklist';
 import { ManagerReviewPanel, ReviseDecision } from '../components/ManagerPanels';
 import { OversightCards } from '../components/OversightCards';
-import { AssignSelect } from '../components/AssignSelect';
 import { CollaboratorsPanel } from '../components/CollaboratorsPanel';
 import { useCurrentUser } from '../lib/user';
 import { cn, evidenceLabel, evidenceMeta, fileSize, isClosed, money, outcomeMeta, outcomeText, parseServerDate, pastOutcomeLabel, prettifyCodes, reasonLabel, sentenceCase, titleCase } from '../lib/format';
@@ -60,7 +59,7 @@ export function CaseInvestigationPage() {
 
   useEffect(() => setLastCase(disputeId), [disputeId]); // the Investigation link returns here
 
-  const dispute = useQuery({ queryKey: ['disputeDetail', disputeId], queryFn: () => fetchDisputeDetail(disputeId) });
+  const dispute = useQuery({ queryKey: ['disputeDetail', disputeId], queryFn: () => fetchDisputeDetail(disputeId), refetchInterval: (q) => (q.state.data?.status === 'PENDING_AI_REVIEW' ? 10_000 : false) });
   const timeline = useQuery({ queryKey: ['disputeTimeline', disputeId], queryFn: () => fetchDisputeTimeline(disputeId) });
   const brief = useQuery({ queryKey: ['investigationBrief', disputeId], queryFn: () => fetchInvestigationBrief(disputeId, false) });
   const messages = useQuery({ queryKey: ['disputeMessages', disputeId], queryFn: () => fetchDisputeMessages(disputeId), refetchInterval: 30_000 });
@@ -96,7 +95,6 @@ export function CaseInvestigationPage() {
   const decided = isClosed(d.status);
   const withAdmin = d.status === 'PENDING_AI_REVIEW';
   const judged = d.outcome === 'BUYER_FAVOR' || d.outcome === 'SELLER_FAVOR';
-  const oneSideSettled = !decided && !!d.seller_settled_at !== !!d.buyer_settled_at;
   const mine = d.assigned_to === user.name;
   const startAction = () => setWizardOpen(true);
   const b = brief.data;
@@ -110,8 +108,8 @@ export function CaseInvestigationPage() {
 
       {/* Header */}
       <Card className="p-6">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0 space-y-2">
+        <div className="flex flex-col gap-6 xl:flex-row xl:items-center xl:justify-between">
+          <div className="min-w-0 flex-1 space-y-2">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="font-mono text-2xl font-semibold text-white">{d.id}</h1>
               <StatusBadge status={d.status} />
@@ -126,13 +124,12 @@ export function CaseInvestigationPage() {
               {!decided && (
                 <span className="flex items-center gap-1.5">
                   {d.assigned_to ? <>Owner: {mine ? 'you' : d.assigned_to}</> : 'Unassigned'}
-                  {isManager && <AssignSelect disputeId={d.id} assignedTo={d.assigned_to} label="Assign this case" />}
                 </span>
               )}
             </div>
             {!d.ai_owned && <CollaboratorsPanel dispute={d} />}
           </div>
-          <div className="flex items-center gap-8">
+          <div className="flex flex-wrap items-center gap-8">
             <div>
               <div className="text-xs uppercase tracking-wider text-muted">Amount</div>
               <div className="mt-1 whitespace-nowrap text-2xl font-semibold text-white tabular">{money(d.amount, d.currency)}</div>
@@ -165,13 +162,6 @@ export function CaseInvestigationPage() {
         )}
         <ClaimPoints points={d.claim_points} className="mt-3" />
       </Card>
-
-      {oneSideSettled && (
-        <div role="status" className="flex items-start gap-3 rounded-2xl border border-sky-400/25 bg-sky-400/[.07] p-4 text-sm text-sky-100">
-          <Handshake aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
-          <span><span className="font-medium">The {d.seller_settled_at ? 'seller' : 'buyer'} says this was settled outside PayPal.</span> It is not settled until the {d.seller_settled_at ? 'buyer' : 'seller'} confirms too, so the case continues.</span>
-        </div>
-      )}
 
       {!decided && !withAdmin && d.review_note && d.status === 'UNDER_REVIEW' && !isManager && (
         <div role="note" className="rounded-2xl border border-amber-400/25 bg-amber-400/[.07] p-4 text-sm text-amber-100">
@@ -227,23 +217,6 @@ export function CaseInvestigationPage() {
                 <ErrorState message="Couldn't build the case summary." onRetry={() => brief.refetch()} />
               ) : (
                 <>
-                  {decided && (
-                    <Card className="p-6">
-                      <SectionTitle title="Decision" />
-                      <div className="flex gap-3 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4">
-                        <Gavel className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
-                        <div>
-                          <p className="font-medium text-white">{outcomeMeta(d.outcome) ? (judged ? `Decided in the ${outcomeMeta(d.outcome)!.label.toLowerCase()}.` : `${outcomeText(d.outcome)}.`) : 'This case is closed.'}</p>
-                          {d.outcome === 'SETTLED' && <p className="mt-1 text-sm text-muted">The seller and the buyer both confirmed they settled it outside PayPal. No decision was made.</p>}
-                          {d.outcome === 'DISMISSED' && <p className="mt-1 text-sm text-muted">The buyer withdrew the claim. No refund was issued and no decision was made.</p>}
-                          {judged && d.proposed_reason && <p className="mt-1 text-sm text-slate-300"><span className="text-muted">Reason: </span>{d.proposed_reason}</p>}
-                          {isManager && judged && <div className="mt-3"><ReviseDecision dispute={d} /></div>}
-                          <p className="mt-1 text-sm text-muted">There's nothing left to do on this case. To take action, open a case that's New, waiting on replies, or ready to decide from All disputes.</p>
-                        </div>
-                      </div>
-                    </Card>
-                  )}
-
                   {!decided && (
                   <Card className="p-6">
                     <SectionTitle
@@ -310,7 +283,7 @@ export function CaseInvestigationPage() {
                         {b.structured_findings.map((f) => (
                           <li key={f.finding_id} className="rounded-xl border border-line bg-raised/40 p-4">
                             <div className="flex items-start justify-between gap-3">
-                              <p className="text-sm font-medium text-white">{f.claim}</p>
+                              <p className="min-w-0 text-sm font-medium text-white">{f.claim}</p>
                               <Badge tone={f.verification_status === 'verified' ? 'success' : f.verification_status === 'contradicted' ? 'danger' : 'warn'}>
                                 {f.verification_status === 'verified' && <CheckCircle2 className="h-3 w-3" />}{f.verification_status}
                               </Badge>
@@ -355,23 +328,43 @@ export function CaseInvestigationPage() {
           {tab === 'evidence' && (
             <div className="space-y-4 animate-fade-in">
               <Card className="p-6"><EvidenceChecklist disputeId={disputeId} title="What each side has sent" /></Card>
-              <RecordCard
-                id={d.order?.shipment?.id ?? 'DEMO-SHIP-1042'} highlighted={highlighted}
-                icon={<Truck className="h-4 w-4" />} title="Shipment" badge={<Badge tone="info">{d.order?.shipment?.carrier ?? 'Carrier'}</Badge>}
-              >
-                <KeyValue label="Tracking" mono>{d.order?.shipment?.tracking_reference ?? 'N/A'}</KeyValue>
-                <KeyValue label="Status">{titleCase(d.order?.shipment?.status ?? 'unknown')}</KeyValue>
-                <KeyValue label="Address match">{titleCase(d.order?.shipment?.delivery_address_match ?? 'unknown')}</KeyValue>
-                <KeyValue label="Delivered">{d.order?.shipment?.delivered_at ? parseServerDate(d.order.shipment.delivered_at).toLocaleDateString() : 'Not delivered'}</KeyValue>
-              </RecordCard>
-              <RecordCard
-                id={d.transaction?.id ?? 'DEMO-TXN-1042'} highlighted={highlighted}
-                icon={<CreditCard className="h-4 w-4" />} title="Payment" badge={<Badge tone="success">{titleCase(d.transaction?.status ?? 'completed')}</Badge>}
-              >
-                <KeyValue label="Method">{d.transaction?.payment_method ?? 'PayPal'}</KeyValue>
-                <KeyValue label="Gateway ID" mono>{d.transaction?.external_transaction_id ?? 'N/A'}</KeyValue>
-                <KeyValue label="Buyer account" mono>{d.transaction?.buyer_email_masked ?? '—'}</KeyValue>
-              </RecordCard>
+              {d.order ? (
+                <RecordCard
+                  id={d.order.id} highlighted={highlighted}
+                  icon={<Package className="h-4 w-4" />} title="Order" badge={<Badge tone="neutral">{money(d.order.amount, d.order.currency)}</Badge>}
+                >
+                  <div className="col-span-2"><KeyValue label="Item">{d.order.item_summary}</KeyValue></div>
+                  <KeyValue label="Invoice" mono>{d.order.merchant_reference ?? '—'}</KeyValue>
+                  <KeyValue label="Ordered">{d.order.order_date ? parseServerDate(d.order.order_date).toLocaleDateString() : '—'}</KeyValue>
+                </RecordCard>
+              ) : (
+                <MissingRecord icon={<Package className="h-4 w-4" />} title="Order" text="No order on record for this payment." />
+              )}
+              {d.order?.shipment ? (
+                <RecordCard
+                  id={d.order.shipment.id} highlighted={highlighted}
+                  icon={<Truck className="h-4 w-4" />} title="Shipment" badge={<Badge tone="info">{d.order.shipment.carrier ?? 'Carrier'}</Badge>}
+                >
+                  <KeyValue label="Tracking" mono>{d.order.shipment.tracking_reference ?? 'N/A'}</KeyValue>
+                  <KeyValue label="Status">{titleCase(d.order.shipment.status ?? 'unknown')}</KeyValue>
+                  <KeyValue label="Ship to">{d.order.shipment.shipping_address_masked ?? titleCase(d.order.shipment.delivery_address_match ?? 'unknown')}</KeyValue>
+                  <KeyValue label="Delivered">{d.order.shipment.delivered_at ? parseServerDate(d.order.shipment.delivered_at).toLocaleDateString() : 'Not delivered'}</KeyValue>
+                </RecordCard>
+              ) : (
+                <MissingRecord icon={<Truck className="h-4 w-4" />} title="Shipment" text="No tracking on record. The seller hasn't added any." />
+              )}
+              {d.transaction ? (
+                <RecordCard
+                  id={d.transaction.id} highlighted={highlighted}
+                  icon={<CreditCard className="h-4 w-4" />} title="Payment" badge={<Badge tone="success">{titleCase(d.transaction.status ?? 'completed')}</Badge>}
+                >
+                  <KeyValue label="Method">{d.transaction.payment_method ?? 'PayPal'}</KeyValue>
+                  <KeyValue label="Gateway ID" mono>{d.transaction.external_transaction_id ?? 'N/A'}</KeyValue>
+                  <KeyValue label="Buyer account" mono>{d.transaction.buyer_email_masked ?? '—'}</KeyValue>
+                </RecordCard>
+              ) : (
+                <MissingRecord icon={<CreditCard className="h-4 w-4" />} title="Payment" text="No payment on record for this dispute." />
+              )}
 
               <Card className="p-6">
                 <SectionTitle title={`Documents (${d.evidence_items.length})`} />
@@ -524,6 +517,15 @@ export function CaseInvestigationPage() {
         onDone={(r) => { setLastResult(r); setTab('messages'); }}
       />
     </>
+  );
+}
+
+function MissingRecord({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) {
+  return (
+    <Card className="flex items-center gap-2 p-5 text-sm">
+      <span className="text-muted">{icon}</span><span className="font-semibold text-white">{title}</span>
+      <span className="text-muted">· {text}</span>
+    </Card>
   );
 }
 

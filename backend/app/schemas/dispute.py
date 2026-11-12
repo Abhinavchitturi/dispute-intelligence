@@ -106,6 +106,9 @@ class DisputeListItem(BaseModel):
     collaborators: List[str] = []             # other investigators this case has been shared with
     ai_owned: bool = False                    # nobody took it before its deadline, so the AI Agent has the whole case
     ai_owned_at: Optional[datetime] = None
+    conflict_due_at: Optional[datetime] = None   # set while a manager has the case reopened over an investigator's conflict
+    conflict_by: Optional[str] = None
+    buyer_silent: bool = False                   # the buyer's last day passed with no answer: the investigator can dismiss the case
     is_high_profile: bool = False             # the amount is at or above the high-profile threshold: the manager takes these
 
     class Config:
@@ -120,6 +123,7 @@ class ClaimPoint(BaseModel):
     on_file: bool                    # is the supporting evidence already on the case?
     evidence_type: Optional[str] = None
     party: Optional[str] = None      # who to ask: SELLER or BUYER
+    concern: Optional[str] = None    # the evidence is on file but doesn't hold up, and why
 
 class DisputeDetail(DisputeListItem):
     transaction: Optional[TransactionSchema] = None

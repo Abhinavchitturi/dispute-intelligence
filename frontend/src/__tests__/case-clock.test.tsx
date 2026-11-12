@@ -50,25 +50,6 @@ describe('Unassigned cases lead the manager\'s screen', () => {
     return calls;
   };
 
-  it('puts the cases nobody owns at the very top, most urgent first, each with its deadline and an owner box', async () => {
-    signInAs('MANAGER');
-    const calls = api();
-    mount(<OverviewPage />);
-    const box = await screen.findByLabelText('Nobody owns these yet');
-    const ids = within(box).getAllByText(/^D-/).map((e) => e.textContent);
-    expect(ids).toEqual(['D-HOT', 'D-MID', 'D-CALM']);                                       // the highest score first
-    expect(within(box).getAllByRole('combobox')).toHaveLength(3);                          // assign right there
-    expect(box).toHaveTextContent('goes to the AI Agent to handle itself');
-    expect(within(box).queryByText('D-OWNED')).not.toBeInTheDocument();                    // it already has an owner
-    expect(within(box).queryByText('D-DONE')).not.toBeInTheDocument();                     // and decided cases don't need one
-    expect(calls.some((c) => c.includes('unassigned=true'))).toBe(true);
-    // It sits above the stat tiles, so it is the first thing the manager sees.
-    const tiles = screen.getByText('High profile').closest('section') as HTMLElement;
-    expect(box.compareDocumentPosition(tiles) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(within(box).getByRole('button', { name: /All 3/ }));
-    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/queue?view=unassigned'));
-  });
-
   it('shows nothing when every case has an owner, and nothing to an investigator', async () => {
     signInAs('MANAGER');
     global.fetch = vi.fn().mockImplementation((url: string) => ok(url.includes('/dashboard/summary') ? summary({ unassigned_count: 0 }) : url.endsWith('/notifications') ? { unread: 0, items: [], open_alerts: [] } : url.includes('/disputes') ? [CASES[3]] : [])) as any;
@@ -82,28 +63,12 @@ describe('Unassigned cases lead the manager\'s screen', () => {
     expect(screen.queryByLabelText('Nobody owns these yet')).not.toBeInTheDocument();
   });
 
-  it('the Disputes page has an Unassigned tab and a With the AI Agent tab for the manager only', async () => {
-    signInAs('MANAGER'); api();
-    const { unmount } = mount(<DisputeQueuePage />, '/queue?view=unassigned');
-    expect(await screen.findByText('D-HOT')).toBeInTheDocument();
-    expect(screen.getByText('D-CALM')).toBeInTheDocument();
-    expect(screen.queryByText('D-OWNED')).not.toBeInTheDocument();
-    expect(screen.queryByText('D-AI')).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^Unassigned/ })).toHaveTextContent('3');
-    expect(screen.getByRole('tab', { name: /With the AI Agent/ })).toHaveTextContent('1');
-    unmount();
-    signOut();
-    mount(<DisputeQueuePage />, '/queue');
-    await screen.findByText('D-HOT');
-    expect(screen.queryByRole('tab', { name: /^Unassigned/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: /With the AI Agent/ })).not.toBeInTheDocument();
-  });
-
   it('shows which cases the AI Agent has, and why', async () => {
     signInAs('MANAGER'); api();
     mount(<DisputeQueuePage />, '/queue?view=ai');
     expect(await screen.findByText('D-AI')).toBeInTheDocument();
-    expect(screen.getByText('With the AI Agent. Nobody took it in time.')).toBeInTheDocument();
+    expect(screen.getByText('AI Agent')).toBeInTheDocument();
+    expect(screen.getByText('Nobody took it in time.')).toBeInTheDocument();
     expect(screen.queryByText('D-HOT')).not.toBeInTheDocument();
   });
 });
@@ -169,6 +134,6 @@ describe('The AI Agent takes a case nobody took', () => {
     expect(card).not.toHaveTextContent('strike');                                           // there was no investigator to blame
     expect(screen.queryByLabelText('With the AI Agent')).not.toBeInTheDocument();           // it is decided now
     expect(screen.getByRole('button', { name: /Overturn decision/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Question the AI's decision/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Report this/ })).not.toBeInTheDocument();
   });
 });

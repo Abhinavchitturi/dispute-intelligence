@@ -97,4 +97,44 @@ class AssignRequest(BaseModel):
 
 
 class DeclareRequest(BaseModel):
-    kind: str  # SETTLED, or WITHDRAWN (buyer only)
+    kind: str  # WITHDRAWN (buyer only)
+
+
+class AIReviewRequest(BaseModel):
+    proposed_outcome: str  # BUYER_FAVOR or SELLER_FAVOR
+    proposed_reason: str
+
+
+class KeyEvidence(BaseModel):
+    supporting_evidence: List[str] = []
+    contradicting_evidence: List[str] = []
+
+
+class AIReviewAssessment(BaseModel):
+    # 1. AI Verdict: AGREES / DISAGREES / INCONCLUSIVE
+    ai_verdict: str = "INCONCLUSIVE"
+    # 2. AI Decision: FULFILL_BUYER / FULFILL_SELLER / INSUFFICIENT_EVIDENCE
+    ai_decision: str = "INSUFFICIENT_EVIDENCE"
+    # 3. Reasoning
+    reasoning: str = ""
+    # 4. Key Evidence
+    key_evidence: KeyEvidence = KeyEvidence()
+    # 5. Investigator Decision Comparison
+    investigator_comparison: str = ""
+    # 6. Evidence Gaps
+    evidence_gaps: str = ""
+
+    # Metadata & backward compatibility
+    verdict: Optional[str] = None
+    agrees: Optional[bool] = None
+    assessment: Optional[str] = None
+    explanation: Optional[str] = None
+    timeline_analysis: List[str] = []
+    contradictions: List[str] = []
+    missing_evidence: List[str] = []
+    key_evidence_analyzed: List[str] = []
+    recommendation: Optional[str] = None
+    model: str = "resolveiq-ai-judge-v1"
+    provider: str = "rule_based"
+    learned_from: Optional[str] = None     # set when the ruling follows a lesson: the case it was taught by
+    lesson_id: Optional[str] = None

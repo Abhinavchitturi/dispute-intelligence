@@ -6,7 +6,12 @@ TEST_DB = "test_resolveiq.db"
 if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 os.environ["DATABASE_URL"] = f"sqlite:///./{TEST_DB}"
+os.environ["AI_AUTO_REVIEW"] = "false"  # tests that need a decision to wait for review would otherwise be ruled on at once. The ones about the AI turn it on.
 os.environ["AUTH_REQUIRED"] = "false"   # most tests are about cases, not sign-in. test_auth.py turns it back on.
+os.environ["RESOLVEIQ_MODE"] = "demo"   # tests run on the demo data whatever the developer's .env says. Sandbox tests set it themselves.
+os.environ["PAYPAL_CLIENT_ID"] = ""      # and never reach the real PayPal sandbox with the developer's keys: PayPal tests use fakes
+os.environ["PAYPAL_CLIENT_SECRET"] = ""
+os.environ["AI_PROVIDER"] = "none"       # and use the built-in rules engine, not a live model: AI tests mock the model themselves
 
 import pytest  # noqa: E402
 

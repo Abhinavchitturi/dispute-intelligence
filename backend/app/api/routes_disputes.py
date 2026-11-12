@@ -26,6 +26,7 @@ from backend.app.services.high_profile import high_profile_filter, is_high_profi
 from backend.app.services.access import collaborator_names, is_restricted, shared_with, visible_filter
 from backend.app.services.auth_service import current_user
 from backend.app.models.team import User
+from backend.app.services import reopen_service
 from backend.app.services.message_service import MessageService, OPEN_STATUSES as OPEN_STATUS_LIST
 
 _PROPOSAL_FIELDS = (
@@ -35,8 +36,21 @@ _PROPOSAL_FIELDS = (
 )
 
 
+def _open_conflict(d: Dispute) -> dict:
+    """An investigator's disagreement with the AI that a manager has reopened the case to settle."""
+    from sqlalchemy.orm import object_session
+    from backend.app.models.team import Flag
+    db = object_session(d)
+    f = db.query(Flag).filter(Flag.dispute_id == d.id, Flag.status == "OPEN").first() if db else None
+    if not f:
+        return {"conflict_due_at": None, "conflict_by": None}
+    who = db.get(User, f.raised_by)
+    return {"conflict_due_at": f.due_at, "conflict_by": who.display_name if who else None}
+
+
 def _proposal_data(d: Dispute, collaborators: Optional[List[str]] = None) -> dict:
-    return {**{f: getattr(d, f) for f in _PROPOSAL_FIELDS}, "is_high_profile": is_high_profile(d), "collaborators": collaborators or []}
+    return {**{f: getattr(d, f) for f in _PROPOSAL_FIELDS}, "is_high_profile": is_high_profile(d), "collaborators": collaborators or [], **_open_conflict(d),
+            "buyer_silent": d.status in OPEN_STATUS_LIST and reopen_service.buyer_went_silent(d)}
 
 router = APIRouter(tags=["Disputes"], dependencies=[Depends(case_user), Depends(case_scope)])
 

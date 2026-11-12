@@ -12,12 +12,13 @@ from backend.app.services.strike_service import StrikeService
 from backend.app.schemas.audit import (
     ActionDraftResponse,
     AdminReviewRequest,
-    AssignRequest,
     DecisionSubmitRequest,
     ActionExecuteRequest,
     ActionExecuteResponse,
     ActionPreviewRequest,
     ActionPreviewResponse,
+    AIReviewRequest,
+    AIReviewAssessment,
 )
 from backend.app.services import evidence_catalog as cat
 from backend.app.services.ai_service import AIService
@@ -155,6 +156,48 @@ def _is_sandbox(dispute: Dispute) -> bool:
     return settings.RESOLVEIQ_MODE == "sandbox" and dispute.source == "paypal_sandbox"
 
 
+@router.post("/disputes/{dispute_id}/ai-review", response_model=AIReviewAssessment)
+async def ai_review_decision(
+    dispute_id: str,
+    request: AIReviewRequest,
+    user: Optional[User] = Depends(case_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Independently analyzes the dispute, evidence, and investigator's proposed decision
+    and reasoning before submission. Returns an objective assessment without altering
+    the investigator's decision.
+    """
+    dispute = _get_dispute(db, dispute_id)
+    if request.proposed_outcome not in ("BUYER_FAVOR", "SELLER_FAVOR", "DISMISSED"):
+        raise HTTPException(status_code=400, detail="Decision must be BUYER_FAVOR, SELLER_FAVOR or DISMISSED.")
+    if not request.proposed_reason or not request.proposed_reason.strip():
+        raise HTTPException(status_code=400, detail="Reasoning is required for AI review.")
+
+    assessment = await AIService.review_decision(
+        dispute=dispute,
+        proposed_outcome=request.proposed_outcome,
+        proposed_reason=request.proposed_reason.strip()
+    )
+    return assessment
+
+
+@router.post("/disputes/{dispute_id}/dismiss-no-response")
+async def dismiss_no_response(dispute_id: str, user: Optional[User] = Depends(case_user), db: Session = Depends(get_db)):
+    """Once the buyer's last day has passed with no answer, the investigator dismisses the case. The AI checks it, the buyer is told how to open a new case."""
+    from backend.app.services import reopen_service
+    dispute = _get_dispute(db, dispute_id)
+    if dispute.status in ("RESOLVED", "CLOSED") or dispute.status == "PENDING_AI_REVIEW":
+        raise HTTPException(status_code=400, detail=f"This dispute is already {dispute.status.lower().replace('_', ' ')}.")
+    if not reopen_service.buyer_went_silent(dispute):
+        raise HTTPException(status_code=400, detail="The buyer still has time to respond, or already did. A case can only be dismissed for no response after the buyer's last day.")
+    assessment = await AIService.review_decision(dispute=dispute, proposed_outcome="DISMISSED", proposed_reason="The buyer did not respond to the evidence request before the deadline.")
+    reopen_service.dismiss_for_silence(db, dispute)
+    db.commit()
+    return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "outcome": dispute.outcome, "ai_verdict": assessment.ai_verdict,
+            "message": "Dismissed. The buyer was told, and sent a link to open a new case."}
+
+
 @router.post("/disputes/{dispute_id}/decision")
 async def submit_decision(dispute_id: str, request: DecisionSubmitRequest, user: Optional[User] = Depends(case_user), db: Session = Depends(get_db)):
     """An investigator's call goes to the AI reviewer before anyone is told. A manager is the top of the chain, so theirs is final at once."""
@@ -173,6 +216,14 @@ async def submit_decision(dispute_id: str, request: DecisionSubmitRequest, user:
                     "message": "Decided. The seller and the buyer have been told."}
     except DecisionError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if settings.AI_AUTO_REVIEW:
+        from backend.app.services import ai_reviewer
+        if await ai_reviewer.review_one(db, dispute):
+            db.refresh(dispute)
+            side = "buyer's" if dispute.outcome == "BUYER_FAVOR" else "seller's"
+            msg = (f"The AI agreed. Decided in the {side} favor, and the seller and the buyer have been told." if dispute.ai_verdict == "APPROVE"
+                   else f"The AI disagreed and ruled in the {side} favor instead. That counts as a strike. If you think it is wrong, report it on the case.")
+            return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "outcome": dispute.outcome, "ai_verdict": dispute.ai_verdict, "message": msg}
     return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "proposed_outcome": dispute.proposed_outcome,
             "message": "Sent for AI review. Nobody has been told yet."}
 
@@ -210,25 +261,3 @@ async def manager_review(dispute_id: str, request: AdminReviewRequest, user: Opt
     side = "buyer" if outcome == "BUYER_FAVOR" else "seller"
     return {"success": True, "dispute_id": dispute.id, "status": dispute.status, "outcome": dispute.outcome, "message_id": msgs[0].id,
             "message": f"Resolved in the {side}'s favor. The seller and the buyer have been told."}
-
-
-@router.post("/disputes/{dispute_id}/assign")
-def assign_dispute(dispute_id: str, request: AssignRequest, user: Optional[User] = Depends(manager_user), db: Session = Depends(get_db)):
-    """The manager gives a case to someone, or takes it off its owner. Investigators ask for cases instead of taking them."""
-    from backend.app.services import assignment_service as assigner
-    dispute = _get_dispute(db, dispute_id)
-    if dispute.status in CLOSED:
-        raise HTTPException(status_code=400, detail="This case is closed.")
-    who = (request.assignee or "").strip()
-    target = db.query(User).filter(User.display_name == who).first() if who else None
-    if who and (target is None or target.is_active is False):
-        raise HTTPException(status_code=400, detail=f"{who} isn't someone who can be given cases.")
-    if target and target.is_blocked:
-        raise HTTPException(status_code=400, detail=f"{who} is blocked. Unblock them first.")
-    by = actor_name(user, "manager")
-    assigner.assign_one(db, dispute, target, by)
-    if target:
-        StrikeService.notify(db, target.id, "ASSIGNED", "You have a new case", f"{by} assigned you {dispute.id}.", dispute.id)
-        assigner.settle_requests(db, target, by, 1)
-    db.commit()
-    return {"success": True, "dispute_id": dispute.id, "assigned_to": dispute.assigned_to}

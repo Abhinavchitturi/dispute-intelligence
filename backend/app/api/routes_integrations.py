@@ -1,16 +1,17 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from backend.app.services.auth_service import current_user, manager_user
 from sqlalchemy.orm import Session
-from typing import Dict, Any
 
 from backend.app.config import settings
 from backend.app.database import get_db
 from backend.app.schemas.integrations import IntegrationStatusResponse, ConnectivityTestResponse
 from backend.app.services.paypal_client import PayPalClient
+from backend.app.services import paypal_sync
 from backend.app.seed.seed_data import seed_database
 from backend.app.services.audit_service import AuditService
 
 router = APIRouter(tags=["Settings & Integrations"], dependencies=[Depends(current_user)])
+
 
 @router.get("/integrations/status", response_model=IntegrationStatusResponse)
 def get_integration_status():
@@ -19,7 +20,7 @@ def get_integration_status():
     Never exposes raw secrets or API keys.
     """
     has_paypal_creds = bool(settings.PAYPAL_CLIENT_ID and settings.PAYPAL_CLIENT_SECRET)
-    has_ai_key = bool(settings.AI_API_KEY)
+    has_ai_key = bool(settings.GEMINI_API_KEY or settings.AI_API_KEY)
 
     return IntegrationStatusResponse(
         environment_mode=settings.RESOLVEIQ_MODE,
@@ -32,7 +33,7 @@ def get_integration_status():
         },
         ai_provider={
             "provider": settings.AI_PROVIDER,
-            "model": settings.AI_MODEL,
+            "model": settings.GEMINI_MODEL or settings.AI_MODEL,
             "configured": has_ai_key,
             "fallback_available": True
         },
@@ -49,6 +50,28 @@ def get_integration_status():
             "live_llm_generation": has_ai_key
         }
     )
+
+@router.post("/integrations/paypal/sync")
+async def sync_paypal_disputes(db: Session = Depends(get_db)):
+    """Imports or refreshes sandbox disputes so they appear in the ResolveIQ queue."""
+    try:
+        sent = await paypal_sync.push_decisions(db, retry_refused=True)   # decisions made here go to PayPal first
+        result = await paypal_sync.sync_disputes(db)
+        if sent:
+            result["message"] += " " + " ".join(sent)
+        return {**result, "decisions_sent": sent}
+    except paypal_sync.PayPalSyncError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post("/integrations/paypal/import/{case_id}")
+async def import_paypal_case(case_id: str, db: Session = Depends(get_db)):
+    """Imports one PayPal case by the ID the buyer was given (PayPal's list can lag behind a new case)."""
+    try:
+        return await paypal_sync.import_dispute(db, case_id)
+    except paypal_sync.PayPalSyncError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
 
 @router.post("/integrations/paypal/test", response_model=ConnectivityTestResponse)
 async def test_paypal_connectivity():
@@ -68,7 +91,9 @@ async def test_paypal_connectivity():
 @router.post("/integrations/ai/test", response_model=ConnectivityTestResponse)
 async def test_ai_connectivity():
     """Tests configured AI provider connectivity or reports deterministic fallback status."""
-    if settings.AI_PROVIDER == "none" or not settings.AI_API_KEY:
+    ai_key = settings.GEMINI_API_KEY or settings.AI_API_KEY
+    ai_model = settings.GEMINI_MODEL or settings.AI_MODEL
+    if settings.AI_PROVIDER == "none" or not ai_key:
         return ConnectivityTestResponse(
             service="ResolveIQ Intelligence Engine",
             connected=True,
@@ -82,13 +107,15 @@ async def test_ai_connectivity():
         service=f"LLM Provider ({settings.AI_PROVIDER})",
         connected=True,
         status_code=200,
-        message=f"Connected to {settings.AI_PROVIDER} ({settings.AI_MODEL}).",
-        details={"provider": settings.AI_PROVIDER, "model": settings.AI_MODEL}
+        message=f"Connected to {settings.AI_PROVIDER} ({ai_model}).",
+        details={"provider": settings.AI_PROVIDER, "model": ai_model}
     )
 
 @router.post("/integrations/reset-demo-data")
 def reset_demo_data(_manager=Depends(manager_user), db: Session = Depends(get_db)):
-    """Resets database and re-seeds deterministic synthetic cases."""
+    """Resets database and re-seeds deterministic synthetic cases. Refused in sandbox mode, which holds PayPal cases only."""
+    if settings.RESOLVEIQ_MODE == "sandbox":
+        raise HTTPException(status_code=409, detail="Demo data is off in sandbox mode, which shows PayPal sandbox cases only. Set RESOLVEIQ_MODE=demo to use it.")
     seed_database(db)
     AuditService.record_event(
         db=db,

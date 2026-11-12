@@ -1,11 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, ArrowRight, Check, Gavel, Info, Send, Store, ThumbsDown, ThumbsUp, User } from 'lucide-react';
-import { draftActionMessage, executeAction, fetchDisputeDetail, fetchEvidenceOptions, previewAction, submitDecision } from '../api/client';
+import { AlertTriangle, ArrowLeft, ArrowRight, Bot, Check, Clock, Flag, Gavel, Info, Send, ShieldAlert, ShieldCheck, Sparkles, Store, ThumbsDown, ThumbsUp, User } from 'lucide-react';
+import {
+  AIReviewAssessment,
+  draftActionMessage,
+  executeAction,
+  fetchDisputeDetail,
+  fetchEvidenceOptions,
+  previewAction,
+  requestAiReview,
+  submitDecision,
+  dismissNoResponse,
+} from '../api/client';
 import { EvidenceChecklist } from './EvidenceChecklist';
 import { ClaimPoints } from './ClaimPoints';
 import { useCurrentUser } from '../lib/user';
-import { ActionExecuteResult, EvidenceBalance, EvidenceRequestOption } from '../types';
+import { ActionExecuteResult, EvidenceRequestOption } from '../types';
 import { Badge, Button, Field, Modal, Select, Skeleton, Textarea, useToast } from './ui/kit';
 import { cn, titleCase } from '../lib/format';
 
@@ -32,7 +42,6 @@ const HINTS: Record<string, string> = {
   PENDING_AI_REVIEW: 'A decision on this case is with the AI reviewer. A manager has to reopen it before you can act.',
 };
 
-/** Where the case stands, in a sentence. One concrete document on file is enough to decide, so say so. */
 function hintFor(status: string, onFile: number): string | undefined {
   if (status === 'UNDER_REVIEW') return HINTS.UNDER_REVIEW;
   if (onFile > 0 && HINTS[status]) {
@@ -42,10 +51,6 @@ function hintFor(status: string, onFile: number): string | undefined {
   return HINTS[status];
 }
 
-/**
- * One evidence request PayPal might send: its checklist, its draft, and the investigator's edits to it.
- * The wizard holds one of these per party, so asking the seller and the buyer together keeps them independent.
- */
 function useActionDraft({ disputeId, action, active, step, open, days, choices }: {
   disputeId: string; action: ActionValue; active: boolean; step: number; open: boolean; days: number; choices?: EvidenceRequestOption[];
 }) {
@@ -54,9 +59,7 @@ function useActionDraft({ disputeId, action, active, step, open, days, choices }
   const [edit, setEdit] = useState<string | undefined>();
   useEffect(() => { if (open) { setPicked(undefined); setEdit(undefined); } }, [open]);
 
-  // First time on a request, start from what the case is missing; after that, keep what the investigator picked.
   const chosen: string[] = picked ?? choices?.filter((o) => o.suggested).map((o) => o.evidence_type) ?? [];
-  // A hand-edited message can no longer match the selection once the list or deadline changes, so rebuild it and say so.
   const resetForChange = () => { if (edit !== undefined) { setEdit(undefined); toast('info', 'The list changed, so the message was rebuilt.'); } };
   const toggle = (t: string) => { resetForChange(); setPicked(chosen.includes(t) ? chosen.filter((x) => x !== t) : [...chosen, t]); };
 
@@ -65,9 +68,8 @@ function useActionDraft({ disputeId, action, active, step, open, days, choices }
     queryFn: () => draftActionMessage(disputeId, { action_type: action, requested_evidence: chosen, deadline_days: days }),
     enabled: open && active && step >= 1 && !!choices,
     staleTime: 60_000,
-    placeholderData: keepPreviousData, // keep showing the last draft while a new one loads, so the box doesn't flicker away
+    placeholderData: keepPreviousData,
   });
-  // While a new draft loads we may be holding the previous one. Never treat it as this action's message.
   const holdingOther = !!draft.data && draft.data.action_type !== action;
   const loading = draft.isLoading || draft.isPlaceholderData || holdingOther;
   const message = edit ?? (draft.data && !holdingOther ? draft.data.body : '');
@@ -87,25 +89,46 @@ function useActionPreview({ disputeId, slot, active, enabled, open, days, notes 
   });
 }
 
-/** Before deciding: the facts on the case, sorted by who they help. Deliberately not a verdict. */
-function BalancePanel({ balance }: { balance: EvidenceBalance }) {
-  const column = (title: string, items: string[], icon: React.ReactNode, tone: string) => (
-    <div>
-      <h4 className={cn('mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider', tone)}>{icon}{title} <span className="font-normal text-muted">({items.length})</span></h4>
-      {items.length ? (
-        <ul className="space-y-1.5">{items.map((t) => <li key={t} className="flex gap-2 text-[13px] text-slate-200"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />{t}</li>)}</ul>
-      ) : <p className="text-[13px] text-muted">Nothing on this side.</p>}
-    </div>
-  );
+/** The AI's second opinion on a decision, before it is sent. Plain words first, the evidence behind it second. */
+export function AiReviewPanel({ a, mine, reviewer }: { a: AIReviewAssessment; mine: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null; reviewer?: string }) {
+  const verdict = a.ai_verdict || (a.verdict === 'AGREE' ? 'AGREES' : a.verdict === 'DISAGREE' ? 'DISAGREES' : 'INCONCLUSIVE');
+  const decision = a.ai_decision || a.recommendation || '';
+  const side = decision === 'FULFILL_BUYER' ? "the buyer's favor" : decision === 'FULFILL_SELLER' ? "the seller's favor" : decision === 'DISMISS_NO_RESPONSE' ? 'dismissing the case' : null;
+  const tone = verdict === 'AGREES' ? 'ok' : verdict === 'DISAGREES' ? 'bad' : 'wait';
+  const headline = reviewer ? (verdict === 'AGREES' ? `The AI agrees with ${reviewer}: ${side ?? 'the decision'}.` : verdict === 'DISAGREES' ? `The AI disagrees with ${reviewer}: it points to ${side ?? 'the other side'}.` : "The AI can't decide this on the evidence on file.")
+    : verdict === 'AGREES' ? `The AI agrees with you: ${side ?? 'your decision'}.`
+    : verdict === 'DISAGREES' ? `The AI sees it differently: ${side ?? 'the other side'}.`
+    : "The AI can't decide yet.";
+  const tidy = (t: string) => t.replace(/^\[[^\]]+\]\s*/, '').replace(/^[A-Z_]+:\s*/, '');
+  const found = (a.key_evidence?.supporting_evidence ?? []).map(tidy);
+  const against = (a.key_evidence?.contradicting_evidence ?? []).map(tidy);
+  const gaps = a.evidence_gaps || (a.missing_evidence?.length ? a.missing_evidence.join('; ') : '');
+  const accent = { ok: 'border-emerald-400/30 bg-emerald-400/[.06] text-emerald-200', bad: 'border-rose-400/30 bg-rose-400/[.06] text-rose-200', wait: 'border-amber-400/30 bg-amber-400/[.06] text-amber-200' }[tone];
+  const Icon = tone === 'ok' ? ShieldCheck : tone === 'bad' ? ShieldAlert : Clock;
+  const list = (items: string[], empty: string) => items.length
+    ? <ul className="space-y-1.5">{items.map((t, i) => <li key={i} className="flex gap-2 text-[13px] leading-snug text-slate-300"><span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-slate-500" />{t}</li>)}</ul>
+    : <p className="text-[13px] text-muted">{empty}</p>;
   return (
-    <section aria-label="How the evidence stacks up" className="rounded-xl border border-line bg-raised/40 p-4">
-      <h3 className="text-sm font-semibold text-white">How the evidence stacks up</h3>
-      <p className="mt-0.5 text-xs text-muted">Facts from the records, sorted by who they help. It isn't a verdict. The call is yours.</p>
-      <div className="mt-3 grid gap-4 sm:grid-cols-2">
-        {column('Toward the buyer', balance.toward_buyer, <ThumbsUp className="h-3.5 w-3.5" />, 'text-amber-300')}
-        {column('Toward the seller', balance.toward_seller, <ThumbsDown className="h-3.5 w-3.5" />, 'text-emerald-300')}
+    <section aria-label="AI Review Assessment" className="space-y-4 rounded-2xl border border-line bg-raised/60 p-5 animate-fade-in">
+      <div className={cn('flex items-start gap-3 rounded-xl border px-4 py-3', accent)}>
+        <Icon aria-hidden className="mt-0.5 h-5 w-5 shrink-0" />
+        <div className="min-w-0">
+          <p className="text-[15px] font-semibold text-white">{headline}</p>
+          {a.reasoning || a.explanation ? <p className="mt-1 text-[13px] leading-relaxed text-slate-200">{a.reasoning || a.explanation}</p> : null}
+        </div>
       </div>
-      {balance.other.length > 0 && <p className="mt-3 border-t border-line pt-3 text-xs text-muted">Also on file: {balance.other.join(', ')}</p>}
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div><h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">What it relied on</h4>{list(found, 'Nothing on file.')}</div>
+        <div><h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">What weakens the other side</h4>{list(against, 'Nothing stands out.')}</div>
+      </div>
+      {(a.investigator_comparison || a.assessment) && (
+        <div><h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">On your reasoning</h4><p className="text-[13px] leading-relaxed text-slate-300">{a.investigator_comparison || a.assessment}</p></div>
+      )}
+      {gaps && <div><h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Still missing</h4><p className="text-[13px] leading-relaxed text-slate-300">{gaps}</p></div>}
+      <p className={cn('border-t border-line pt-3 text-xs text-muted', reviewer && 'hidden')}>
+        This is advice, not a ruling. {verdict === 'DISAGREES' && mine ? 'You can still send your decision. If the AI overturns it after you send it, you will be able to report that to a manager.' : 'You can change your reasoning or send your decision as it is.'}
+        <span className="ml-2 font-mono text-[11px] opacity-60">{a.provider}</span>
+      </p>
     </section>
   );
 }
@@ -118,27 +141,34 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
   const queryClient = useQueryClient();
   const { isManager } = useCurrentUser();
   const [step, setStep] = useState(0);
-  // Asking can be combined (seller and buyer together). Deciding is its own page, reached with "Ready to decide".
   const [selected, setSelected] = useState<ActionValue[]>(['REQUEST_SELLER_EVIDENCE']);
   const [deciding, setDeciding] = useState(false);
   const [days, setDays] = useState(5);
   const [notes, setNotes] = useState('');
   const [reason, setReason] = useState('');
   const [reviewed, setReviewed] = useState(false);
+  const [selectedOutcome, setSelectedOutcome] = useState<'BUYER_FAVOR' | 'SELLER_FAVOR' | null>(null);
+  const [aiAssessment, setAiAssessment] = useState<AIReviewAssessment | null>(null);
 
-  useEffect(() => { if (open) { setStep(0); setSelected(['REQUEST_SELLER_EVIDENCE']); setDeciding(false); setDays(5); setNotes(''); setReason(''); setReviewed(false); } }, [open]);
+  useEffect(() => {
+    if (open) {
+      setStep(0);
+      setSelected(['REQUEST_SELLER_EVIDENCE']);
+      setDeciding(false);
+      setDays(5);
+      setNotes('');
+      setReason('');
+      setReviewed(false);
+      setSelectedOutcome(null);
+      setAiAssessment(null);
+    }
+  }, [open]);
 
   const wantsSeller = selected.includes('REQUEST_SELLER_EVIDENCE');
   const wantsBuyer = selected.includes('REQUEST_BUYER_EVIDENCE');
 
   const detail = useQuery({ queryKey: ['disputeDetail', disputeId], queryFn: () => fetchDisputeDetail(disputeId), enabled: open });
   const options = useQuery({ queryKey: ['evidenceOptions', disputeId], queryFn: () => fetchEvidenceOptions(disputeId), enabled: open && !deciding && (wantsSeller || wantsBuyer) });
-  // The "how the evidence stacks up" facts come with a decision draft. The draft's wording isn't used: an admin sends the notice.
-  const balance = useQuery({
-    queryKey: ['decisionBalance', disputeId],
-    queryFn: () => draftActionMessage(disputeId, { action_type: 'DECIDE_FOR_BUYER' }),
-    enabled: open && deciding,
-  });
 
   const base = { disputeId, step, open, days };
   const seller = useActionDraft({ ...base, action: 'REQUEST_SELLER_EVIDENCE', active: wantsSeller && !deciding, choices: options.data?.seller });
@@ -153,7 +183,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
   const previewBuyer = useActionPreview({ disputeId, slot: buyer, active: wantsBuyer && !deciding, enabled: step === 2, open, days, notes });
   const previews = [...(wantsSeller ? [previewSeller] : []), ...(wantsBuyer ? [previewBuyer] : [])];
 
-  const invalidate = () => ['disputeDetail', 'disputeTimeline', 'dashboardSummary', 'disputes', 'urgentDisputes', 'auditEvents', 'messageThreads', 'disputeMessages', 'evidenceOptions', 'evidenceSummary']
+  const invalidate = () => ['disputeDetail', 'disputeTimeline', 'dashboardSummary', 'disputes', 'urgentDisputes', 'auditEvents', 'messageThreads', 'disputeMessages', 'evidenceOptions', 'evidenceSummary', 'flags', 'notifications']
     .forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
 
   const execute = useMutation({
@@ -166,7 +196,6 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
             requested_evidence: s.chosen, deadline_days: days,
           }));
         } catch (e) {
-          // Don't hide that the first one already went out.
           if (done.length) throw new Error(`The request to the ${partyOf(slots[0].action)} was sent, but the one to the ${partyOf(s.action)} failed: ${(e as Error).message}`);
           throw e;
         }
@@ -183,6 +212,12 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
     onError: (e: Error) => { toast('error', `Action failed: ${e.message}`); invalidate(); },
   });
 
+  const dismiss = useMutation({
+    mutationFn: () => dismissNoResponse(disputeId),
+    onSuccess: (r) => { onDone({ message: r.message, env: 'demo', audit: 'Dismissed: no buyer response' }); toast('success', r.message); invalidate(); onClose(); },
+    onError: (e: Error) => { toast('error', e.message); invalidate(); },
+  });
+
   const decide = useMutation({
     mutationFn: (outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR') => submitDecision(disputeId, { outcome, reason: reason.trim() }),
     onSuccess: (r) => {
@@ -194,9 +229,31 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
     onError: (e: Error) => { toast('error', `Couldn't send the decision: ${e.message}`); invalidate(); },
   });
 
+  const aiReview = useMutation({
+    mutationFn: (payload: { proposed_outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR'; proposed_reason: string }) =>
+      requestAiReview(disputeId, payload),
+    onSuccess: (data) => {
+      setAiAssessment(data);
+      const v: string = data.ai_verdict || data.verdict;
+      toast(
+        'info',
+        `AI Review complete: ${
+          v === 'AGREES' || v === 'AGREE'
+            ? 'AI agrees with this decision (Will Approve)'
+            : v === 'DISAGREES' || v === 'DISAGREE'
+            ? 'AI will OVERTURN this decision'
+            : 'Inconclusive — AI cannot approve yet'
+        }`
+      );
+    },
+    onError: (e: Error) => {
+      toast('error', `AI Review failed: ${e.message}`);
+    },
+  });
+
   const pick = (a: ActionValue) => setSelected((cur) => {
-    if (cur.includes(a)) return cur.length > 1 ? cur.filter((x) => x !== a) : cur; // always keep at least one
-    return ACTIONS.map((x) => x.value).filter((v) => cur.includes(v) || v === a);   // stable order: seller, then buyer
+    if (cur.includes(a)) return cur.length > 1 ? cur.filter((x) => x !== a) : cur;
+    return ACTIONS.map((x) => x.value).filter((v) => cur.includes(v) || v === a);
   });
   const changeDays = (d: number) => { slots.forEach((s) => s.resetForChange()); setDays(d); };
   const readyToDecide = () => { setDeciding(true); setStep(1); };
@@ -326,7 +383,7 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
   };
 
   return (
-    <Modal open={open} onClose={onClose} size="lg" title="Take action" footer={footer}>
+    <Modal open={open} onClose={onClose} size="lg" title={deciding ? 'Ready for Review' : 'Take action'} footer={footer}>
       <ol className="flex items-center gap-2" aria-label="Steps">
         {steps.map((label, i) => (
           <li key={label} className="flex flex-1 items-center gap-2" aria-current={i === step ? 'step' : undefined}>
@@ -356,11 +413,16 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
             </h3>
             <div role="group" aria-label="Ask for evidence" className="grid gap-3 sm:grid-cols-2">{ACTIONS.map(card)}</div>
           </div>
-          {/* Deciding is a different kind of step, so it doesn't sit among the choices. */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
             <p className="max-w-sm text-[13px] text-muted">{isManager ? 'Have what you need? Review everything on file and make your call. As manager, your decision is final and the seller and the buyer are told at once.' : 'Have what you need? Review everything on file and make your call. The AI reviewer checks it before anyone is told.'}</p>
             <Button onClick={readyToDecide} disabled={inReview}><Gavel className="h-4 w-4" />Ready to decide</Button>
           </div>
+          {detail.data?.buyer_silent && (
+            <div role="group" aria-label="The buyer did not respond" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/30 bg-amber-400/[.07] p-4">
+              <p className="max-w-md text-[13px] text-amber-50">The buyer's last day to respond has passed and nothing came back. The case can be dismissed. The AI checks it, and the buyer is told how to open a new case.</p>
+              <Button variant="primary" loading={dismiss.isPending} onClick={() => dismiss.mutate()}>Dismiss: buyer didn't respond</Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -393,28 +455,150 @@ export function ActionWizard({ open, onClose, disputeId, onJumpToRecord, onDone 
         <div className="space-y-5 animate-fade-in">
           {detail.data && <ClaimPoints points={detail.data.claim_points} />}
           <EvidenceChecklist disputeId={disputeId} title="Evidence on this case" />
-          {balance.isLoading ? <Skeleton className="h-28" /> : balance.data?.evidence_balance && <BalancePanel balance={balance.data.evidence_balance} />}
 
-          <section aria-label="Your decision" className="space-y-3 border-t border-line pt-5">
-            <Field label="Why are you deciding this way?">
+          <section aria-label="Your decision" className="space-y-4 border-t border-line pt-5">
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <label className="text-xs font-semibold uppercase tracking-wider text-muted">
+                  1. Select your decision
+                </label>
+                {selectedOutcome && (
+                  <span className="text-xs text-brand-soft">
+                    Selected: {selectedOutcome === 'BUYER_FAVOR' ? "Buyer's favor" : "Seller's favor"}
+                  </span>
+                )}
+              </div>
+              <div role="radiogroup" aria-label="Select decision" className="grid gap-2.5 sm:grid-cols-2">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedOutcome === 'BUYER_FAVOR'}
+                  onClick={() => {
+                    setSelectedOutcome('BUYER_FAVOR');
+                    if (aiAssessment) setAiAssessment(null);
+                  }}
+                  className={cn(
+                    'flex items-center justify-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium transition',
+                    selectedOutcome === 'BUYER_FAVOR'
+                      ? 'border-brand bg-brand/20 text-white shadow-sm ring-1 ring-brand/40'
+                      : 'border-line bg-raised/40 text-slate-300 hover:border-line-strong hover:bg-raised'
+                  )}
+                >
+                  <ThumbsUp className="h-4 w-4 text-emerald-400" />
+                  Buyer's favor
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedOutcome === 'SELLER_FAVOR'}
+                  onClick={() => {
+                    setSelectedOutcome('SELLER_FAVOR');
+                    if (aiAssessment) setAiAssessment(null);
+                  }}
+                  className={cn(
+                    'flex items-center justify-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium transition',
+                    selectedOutcome === 'SELLER_FAVOR'
+                      ? 'border-brand bg-brand/20 text-white shadow-sm ring-1 ring-brand/40'
+                      : 'border-line bg-raised/40 text-slate-300 hover:border-line-strong hover:bg-raised'
+                  )}
+                >
+                  <ThumbsDown className="h-4 w-4 text-amber-400" />
+                  Seller's favor
+                </button>
+              </div>
+            </div>
+
+            <Field label="2. Why are you deciding this way?">
               <Textarea
-                rows={4} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Reason for your decision"
+                rows={4}
+                value={reason}
+                onChange={(e) => {
+                  setReason(e.target.value);
+                  if (aiAssessment) setAiAssessment(null);
+                }}
+                aria-label="Reason for your decision"
                 placeholder="For example: the carrier confirmed delivery to the address on the order, and the buyer sent no footage."
               />
             </Field>
-            <p className="flex gap-2 text-xs text-muted"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />{isManager ? 'As manager, your decision is final. There is no AI review. The seller and the buyer are told straight away, and each gets an email listing the proof both sides sent.' : 'Your reason goes to the AI reviewer with your decision. The seller and the buyer are told once it rules. If it overturns you, that is a strike, and you can flag it to a manager if you think it is wrong.'}</p>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-raised/40 p-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
+                  <Sparkles className="h-3.5 w-3.5 text-brand-soft" />
+                  <span>AI Review</span>
+                </div>
+                <p className="mt-0.5 text-[11px] text-muted">
+                  Independently evaluate the dispute evidence against your decision before submitting.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                loading={aiReview.isPending}
+                disabled={!selectedOutcome || !reason.trim()}
+                onClick={() => {
+                  if (selectedOutcome && reason.trim()) {
+                    aiReview.mutate({ proposed_outcome: selectedOutcome, proposed_reason: reason.trim() });
+                  }
+                }}
+                className="border border-brand/40 bg-brand/10 text-brand-soft hover:bg-brand/20 hover:text-white"
+              >
+                <Sparkles className="h-4 w-4" />
+                {aiReview.isPending ? 'Reviewing...' : 'AI Review'}
+              </Button>
+            </div>
+
+            {aiAssessment && <AiReviewPanel a={aiAssessment} mine={selectedOutcome} />}
+
+            <p className="flex gap-2 text-xs text-muted">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {isManager
+                ? 'As manager, your decision is final. There is no AI review. The seller and the buyer are told straight away, and each gets an email listing the proof both sides sent.'
+                : 'Your reason goes to the AI reviewer with your decision. The seller and the buyer are told once it rules. If it overturns you, that is a strike, and you can flag it to a manager if you think it is wrong.'}
+            </p>
+
             <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-raised/40 p-3 text-sm text-slate-200">
               <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#0A84FF]" />
               <span>I've reviewed the evidence on file and I'm making this decision.</span>
             </label>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Button variant="primary" loading={decide.isPending && decide.variables === 'BUYER_FAVOR'} disabled={!canDecide} onClick={() => decide.mutate('BUYER_FAVOR')}>
-                <ThumbsUp className="h-4 w-4" />Buyer's favor
+
+            {selectedOutcome ? (
+              <Button
+                variant="primary"
+                loading={decide.isPending}
+                disabled={!canDecide}
+                onClick={() => decide.mutate(selectedOutcome)}
+                className="w-full py-2.5 text-sm"
+              >
+                {selectedOutcome === 'BUYER_FAVOR' ? <ThumbsUp className="h-4 w-4" /> : <ThumbsDown className="h-4 w-4" />}
+                Submit decision ({selectedOutcome === 'BUYER_FAVOR' ? "Buyer's favor" : "Seller's favor"})
               </Button>
-              <Button variant="primary" loading={decide.isPending && decide.variables === 'SELLER_FAVOR'} disabled={!canDecide} onClick={() => decide.mutate('SELLER_FAVOR')}>
-                <ThumbsDown className="h-4 w-4" />Seller's favor
-              </Button>
-            </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Button
+                  variant="primary"
+                  loading={decide.isPending && decide.variables === 'BUYER_FAVOR'}
+                  disabled={!canDecide}
+                  onClick={() => {
+                    setSelectedOutcome('BUYER_FAVOR');
+                    decide.mutate('BUYER_FAVOR');
+                  }}
+                >
+                  <ThumbsUp className="h-4 w-4" />Buyer's favor
+                </Button>
+                <Button
+                  variant="primary"
+                  loading={decide.isPending && decide.variables === 'SELLER_FAVOR'}
+                  disabled={!canDecide}
+                  onClick={() => {
+                    setSelectedOutcome('SELLER_FAVOR');
+                    decide.mutate('SELLER_FAVOR');
+                  }}
+                >
+                  <ThumbsDown className="h-4 w-4" />Seller's favor
+                </Button>
+              </div>
+            )}
             {!reasonOk && reason.length > 0 && <p className="text-xs text-amber-300">Add a little more. The reviewer needs to see your reasoning.</p>}
           </section>
         </div>

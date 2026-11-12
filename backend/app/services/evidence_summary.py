@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from backend.app.models.dispute import Dispute
 from backend.app.models.evidence import Evidence
 from backend.app.services import evidence_catalog as cat
+from backend.app.services.evidence_checks import concern_for
 from backend.app.services.evidence_documents import VIDEO_TYPES, preview_kind
 
 
@@ -18,13 +19,13 @@ def _meta(ev: Evidence) -> Dict[str, Any]:
         return {}
 
 
-def _item(evidence_type: str, party: Optional[str], ev: Optional[Evidence], missing_note: str = "") -> Dict[str, Any]:
+def _item(evidence_type: str, party: Optional[str], ev: Optional[Evidence], missing_note: str = "", dispute: Optional[Dispute] = None) -> Dict[str, Any]:
     if ev is None:
         return {
             "evidence_type": evidence_type, "label": cat.label(evidence_type), "party": party, "status": "MISSING",
             "detail": missing_note, "why": cat.why(evidence_type), "description": None, "evidence_id": None,
             "provided_at": None, "file_name": None, "content_type": None, "size_bytes": None, "duration_seconds": None, "storage": None,
-            "preview": None, "is_video": False,
+            "preview": None, "is_video": False, "concern": None,
         }
     m = _meta(ev)
     return {
@@ -35,6 +36,7 @@ def _item(evidence_type: str, party: Optional[str], ev: Optional[Evidence], miss
         "duration_seconds": m.get("duration_seconds"), "storage": m.get("storage"),
         "preview": preview_kind(evidence_type, m.get("content_type")),  # DOCUMENT, IMAGE, or None for video
         "is_video": evidence_type in VIDEO_TYPES or str(m.get("content_type") or "").startswith("video"),
+        "concern": concern_for(dispute, ev) if dispute is not None else None,
     }
 
 
@@ -68,7 +70,7 @@ def build(dispute: Dispute) -> Dict[str, List[Dict[str, Any]]]:
             ev = _available(dispute, t)
             if ev:
                 used.add(ev.id)
-            rows.append(_item(t, party, ev, "" if ev else _why_missing(dispute, party, t)))
+            rows.append(_item(t, party, ev, "" if ev else _why_missing(dispute, party, t), dispute))
         return rows
 
     seller = side(cat.SELLER, seller_types)
@@ -80,7 +82,7 @@ def build(dispute: Dispute) -> Dict[str, List[Dict[str, Any]]]:
         if ev.id in used or ev.availability_status != "AVAILABLE":
             continue
         by = _meta(ev).get("provided_by")
-        row = _item(ev.evidence_type, by or None, ev)
+        row = _item(ev.evidence_type, by or None, ev, "", dispute)
         (buyer if by == cat.BUYER else seller if by == cat.SELLER else records).append(row)
     # Missing items that the case itself flagged, but that are not on the standard checklist.
     listed = {r["evidence_type"] for r in seller + buyer + records}
@@ -95,7 +97,7 @@ def build(dispute: Dispute) -> Dict[str, List[Dict[str, Any]]]:
             continue
         for t in m.requested_evidence:
             if t not in listed:
-                row = _item(t, m.counterparty, _available(dispute, t), "" if _available(dispute, t) else _why_missing(dispute, m.counterparty, t))
+                row = _item(t, m.counterparty, _available(dispute, t), "" if _available(dispute, t) else _why_missing(dispute, m.counterparty, t), dispute)
                 (seller if m.counterparty == cat.SELLER else buyer).append(row)
                 listed.add(t)
     return {"seller": seller, "buyer": buyer, "records": records}

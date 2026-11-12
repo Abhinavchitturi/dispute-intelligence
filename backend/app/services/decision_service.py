@@ -5,9 +5,9 @@ If it approves, that is the decision. If it overturns, the AI's call stands and 
 both: they can decide a pending case themselves, send it back, or overturn a decision after the fact. When they overturn the AI,
 that is recorded as feedback for the AI team to train on. Nobody outside PayPal is told until the case is decided.
 
-Settled cases: each side can say the dispute was settled outside PayPal. It is only SETTLED when both do.
 Dismissed cases: only the buyer can withdraw a claim. PayPal then closes it with no refund and no decision.
 """
+import json
 import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -18,7 +18,7 @@ from backend.app.config import settings
 from backend.app.models.dispute import Dispute
 from backend.app.models.message import DisputeMessage
 from backend.app.models.team import AIReview, Flag, ManagerAlert as ManagerAlertModel, User
-from backend.app.services import email_service
+from backend.app.services import email_service, lesson_service
 from backend.app.services import evidence_catalog as cat
 from backend.app.services.audit_service import AuditService
 from backend.app.services.message_service import CLOSED, PENDING_REVIEW, MessageService
@@ -81,6 +81,8 @@ class DecisionService:
         """A manager found a problem. The case returns to Ready to decide; nobody outside PayPal is told."""
         if dispute.status not in (PENDING_REVIEW, "RESOLVED"):
             raise DecisionError("Only a case waiting for review, or one already decided, can be reopened.")
+        if db.query(Flag).filter(Flag.dispute_id == dispute.id, Flag.status == "OPEN").first():
+            raise DecisionError("An investigator reported this decision. It stays closed: overturn the decision or keep it.")
         note = (note or "").strip()
         if not note:
             raise DecisionError("Say what the issue is, so the investigator knows what to fix.")
@@ -118,7 +120,7 @@ class DecisionService:
     # ---------- the AI reviewer's ruling ----------
     @classmethod
     def ai_verdict(cls, db: Session, dispute: Dispute, verdict: str, outcome: Optional[str], rationale: str, model: Optional[str],
-                   subject: Optional[str], body: str, sandbox: bool) -> AIReview:
+                   subject: Optional[str], body: str, sandbox: bool, assessment: Optional[dict] = None) -> AIReview:
         """The AI approves (the investigator's call stands) or overturns (the AI's call stands and the investigator gets a strike)."""
         if dispute.status != PENDING_REVIEW:
             raise DecisionError("This case isn't waiting for an AI review.")
@@ -134,7 +136,8 @@ class DecisionService:
             raise DecisionError(f"To overturn a {OUTCOME_LABEL[proposed]} decision, the outcome must be {OPPOSITE[proposed]}.")
         investigator = StrikeService.investigator_named(db, dispute.proposed_by)
         review = AIReview(id=f"AIR-{uuid.uuid4().hex[:10]}", dispute_id=dispute.id, investigator_id=investigator.id if investigator else None,
-                          proposed_outcome=proposed, verdict=verdict, ai_outcome=final, rationale=rationale, model=model)
+                          proposed_outcome=proposed, verdict=verdict, ai_outcome=final, rationale=rationale, model=model,
+                          assessment_json=json.dumps(assessment, default=str) if assessment else None)
         db.add(review)
         dispute.ai_verdict, dispute.ai_rationale = verdict, rationale
         AuditService.record_event(
@@ -200,7 +203,8 @@ class DecisionService:
             db.add(DisputeMessage(
                 id=_msg_id(), dispute_id=dispute.id, direction="OUTBOUND", counterparty=party, action_type="DECISION_REVISED",
                 subject=f"Updated decision on dispute {dispute.id}",
-                body=f"After a further review, the decision on dispute {dispute.id} changed from {OUTCOME_LABEL[before]} to {OUTCOME_LABEL[outcome]}.\n\nWhy: {note}",
+                body=(f"After a further review, the decision on dispute {dispute.id} changed from {OUTCOME_LABEL[before]} to {OUTCOME_LABEL[outcome]}.\n\nWhy: {note}"
+                      + (f"\n\n{email_service.buyer_loss_text(dispute)}" if party == cat.BUYER and outcome == "SELLER_FAVOR" else "")),
                 source="synthetic" if dispute.source == "synthetic" else "paypal_sandbox", awaiting_reply=False, is_read=True, created_at=now,
             ))
         email_service.decision_emails(db, dispute, outcome, revised=True, note=note)
@@ -210,6 +214,7 @@ class DecisionService:
         if review and review.ai_outcome != outcome:
             review.correct_outcome, review.correction_note = outcome, note
             review.corrected_by, review.corrected_at, review.correction_source = manager, now, source
+            lesson_service.record(db, dispute, review.id, review.ai_outcome, outcome, note, manager)
         # The investigator had it right all along, so the strike comes off.
         if dispute.proposed_outcome == outcome and dispute.ai_verdict == "OVERTURN":
             StrikeService.void_strike(db, dispute.id, manager, "A manager upheld the investigator's original decision.")
@@ -227,7 +232,7 @@ class DecisionService:
         if dispute.ai_verdict != "OVERTURN" or dispute.status != "RESOLVED":
             raise DecisionError("You can only flag a case where the AI reviewer overturned your decision.")
         points = (points or "").strip()
-        if len(points) < 30:
+        if len(points) < 10:
             raise DecisionError("Explain what the AI got wrong, with your reasons, so the manager can check it.")
         if db.query(Flag).filter(Flag.dispute_id == dispute.id, Flag.status == "OPEN").first():
             raise DecisionError("This case is already flagged and waiting for a manager.")
@@ -240,7 +245,7 @@ class DecisionService:
         for a in db.query(ManagerAlertModel).filter(ManagerAlertModel.dispute_id == dispute.id, ManagerAlertModel.kind == "AI_OVERTURN", ManagerAlertModel.status == "OPEN").all():
             a.status, a.sorted_by, a.sorted_at, a.sorted_note = "SORTED", who, datetime.utcnow(), "Replaced by the investigator's conflict"
         StrikeService.open_alert(db, "FLAG", f"Conflict raised by {who} on {dispute.id}",
-                                 f"{who} disagrees with the AI's decision on {dispute.id}. Reason: {points} Reopen the case and settle it by {due:%d %b} (within {FLAG_DAYS} days).",
+                                 f"{who} disagrees with the AI's decision on {dispute.id}. Reason: {points} The case stays closed. Review it and overturn the decision or keep it by {due:%d %b} (within {FLAG_DAYS} days).",
                                  user_id=user.id if user else None, dispute_id=dispute.id)
         db.commit()
         return flag
@@ -276,15 +281,15 @@ class DecisionService:
         db.commit()
         return flag
 
-    # ---------- settled and dismissed ----------
+    # ---------- dismissed ----------
     @classmethod
     def declare(cls, db: Session, dispute: Dispute, party: str, kind: str) -> DisputeMessage:
-        """A seller or buyer tells PayPal the dispute is settled, or the buyer withdraws. Returns their message."""
+        """The buyer tells PayPal they withdraw the claim. The case is dismissed. Returns their message."""
         if party not in PARTY_WORD:
             raise DecisionError("Party must be SELLER or BUYER.")
-        if kind not in ("SETTLED", "WITHDRAWN"):
-            raise DecisionError("Kind must be SETTLED or WITHDRAWN.")
-        if kind == "WITHDRAWN" and party != cat.BUYER:
+        if kind != "WITHDRAWN":
+            raise DecisionError("Kind must be WITHDRAWN.")
+        if party != cat.BUYER:
             raise DecisionError("Only the buyer can withdraw a claim.")
         if dispute.status in CLOSED:
             raise DecisionError(f"This dispute is already {dispute.status.lower()}.")
@@ -292,46 +297,18 @@ class DecisionService:
         who = PARTY_WORD[party]
         source = "synthetic" if dispute.source == "synthetic" else "paypal_sandbox"
 
-        if kind == "SETTLED":
-            if (dispute.seller_settled_at if party == cat.SELLER else dispute.buyer_settled_at):
-                raise DecisionError(f"The {who} has already said this is settled.")
-            subject, text = f"Re: dispute {dispute.id}", f"We have settled this with the {'buyer' if party == cat.SELLER else 'seller'} outside PayPal. Please close the dispute."
-            if party == cat.SELLER:
-                dispute.seller_settled_at = now
-            else:
-                dispute.buyer_settled_at = now
-        else:
-            subject, text = f"Re: dispute {dispute.id}", "I'd like to withdraw my claim. I no longer want to pursue this dispute."
-
         inbound = DisputeMessage(
-            id=_msg_id(), dispute_id=dispute.id, direction="INBOUND", counterparty=party, action_type=f"DECLARE_{kind}",
-            subject=subject, body=text, source=source, awaiting_reply=False, is_read=False, created_at=now,
+            id=_msg_id(), dispute_id=dispute.id, direction="INBOUND", counterparty=party, action_type="DECLARE_WITHDRAWN",
+            subject=f"Re: dispute {dispute.id}", body="I'd like to withdraw my claim. I no longer want to pursue this dispute.", source=source,
+            awaiting_reply=False, is_read=False, created_at=now,
         )
         db.add(inbound)
 
-        if kind == "WITHDRAWN":
-            _close(db, dispute, "DISMISSED")
-            notice = f"Dispute {dispute.id} is dismissed. The buyer withdrew the claim. No refund is issued and no decision was made."
-            cls._notify_both(db, dispute, "DISPUTE_DISMISSED", f"Dispute {dispute.id} dismissed", notice, now, source)
-            AuditService.record_event(db=db, dispute_id=dispute.id, actor=f"{who}_simulator" if source == "synthetic" else who, action="CLAIM_WITHDRAWN",
-                                      status="SUCCESS", source=source, result_summary="The buyer withdrew the claim. The case is dismissed.")
-        elif dispute.seller_settled_at and dispute.buyer_settled_at:
-            _close(db, dispute, "SETTLED")
-            notice = f"Dispute {dispute.id} is settled. Both the seller and the buyer confirmed they settled it outside PayPal. No decision was made."
-            cls._notify_both(db, dispute, "DISPUTE_SETTLED", f"Dispute {dispute.id} settled", notice, now, source)
-            AuditService.record_event(db=db, dispute_id=dispute.id, actor="system", action="CASE_SETTLED", status="SUCCESS", source=source,
-                                      result_summary="Both sides confirmed a settlement outside PayPal. The case is settled.")
-        else:
-            other = cat.BUYER if party == cat.SELLER else cat.SELLER
-            db.add(DisputeMessage(
-                id=_msg_id(), dispute_id=dispute.id, direction="OUTBOUND", counterparty=other, action_type="SETTLEMENT_NOTICE",
-                subject=f"The {who} says dispute {dispute.id} is settled",
-                body=f"The {who} says this was settled outside PayPal. It only counts as settled if you confirm too. If it isn't, ignore this and the case continues.",
-                source=source, awaiting_reply=False, is_read=True, created_at=now,
-            ))
-            AuditService.record_event(db=db, dispute_id=dispute.id, actor=f"{who}_simulator" if source == "synthetic" else who, action="SETTLEMENT_CLAIMED",
-                                      status="SUCCESS", source=source,
-                                      result_summary=f"The {who} says it was settled outside PayPal. Not settled until the {PARTY_WORD[other]} confirms.")
+        _close(db, dispute, "DISMISSED")
+        notice = f"Dispute {dispute.id} is dismissed. The buyer withdrew the claim. No refund is issued and no decision was made."
+        cls._notify_both(db, dispute, "DISPUTE_DISMISSED", f"Dispute {dispute.id} dismissed", notice, now, source)
+        AuditService.record_event(db=db, dispute_id=dispute.id, actor=f"{who}_simulator" if source == "synthetic" else who, action="CLAIM_WITHDRAWN",
+                                  status="SUCCESS", source=source, result_summary="The buyer withdrew the claim. The case is dismissed.")
         db.commit()
         db.refresh(inbound)
         return inbound

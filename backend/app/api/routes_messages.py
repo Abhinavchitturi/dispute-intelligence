@@ -60,9 +60,7 @@ def simulate_reply_now(message_id: str, db: Session = Depends(get_db)):
 
 @router.post("/disputes/{dispute_id}/parties/{party}/declare", response_model=MessageSchema)
 def declare_from_party(dispute_id: str, party: str, request: DeclareRequest, db: Session = Depends(get_db)):
-    """Demo only: the seller or buyer says the dispute is settled outside PayPal, or the buyer withdraws.
-
-    Settled needs BOTH sides. Withdrawn (buyer only) dismisses the case."""
+    """Demo only: the buyer withdraws the claim, which dismisses the case."""
     dispute = db.query(Dispute).filter(Dispute.id == dispute_id).first()
     if not dispute:
         raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")

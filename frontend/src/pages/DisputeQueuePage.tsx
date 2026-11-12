@@ -1,20 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowDownUp, ChevronRight, Eye, FilterX, Gavel, Inbox, RefreshCw, Share2 } from 'lucide-react';
-import { fetchDisputeDetail, fetchDisputes } from '../api/client';
-import { AssignSelect } from '../components/AssignSelect';
-import { DistributeDialog } from '../components/DistributeDialog';
+import { ArrowDownUp, ChevronRight, Download, FileDown, FilterX, Gavel, Inbox, RefreshCw } from 'lucide-react';
+import { fetchDisputeDetail, fetchDisputes, syncPayPalDisputes } from '../api/client';
+import { ImportCaseDialog } from '../components/ImportCaseDialog';
+import { DisputeGrid, GRID_SORTS } from '../components/DisputeGrid';
+import type { GridApi } from 'ag-grid-community';
 import { DisputeSummary } from '../types';
-import { Badge, Button, Card, Drawer, EmptyState, ErrorState, KeyValue, Meter, PageHeader, SearchInput, Segmented, Select, Skeleton } from '../components/ui/kit';
+import { Badge, Button, Card, Drawer, EmptyState, ErrorState, KeyValue, Meter, PageHeader, SearchInput, Segmented, Select, Skeleton, useToast } from '../components/ui/kit';
 import { EvidenceBadge, StatusBadge } from '../components/ui/StatusBadges';
 import { DecideBy, Countdown, ScoreRing } from '../components/DisputeBits';
 import { cn, isUrgent, money, OPEN_STATUSES, reasonLabel, timeLeft, WAITING_STATUSES } from '../lib/format';
 import { useDebounced, useNow } from '../lib/hooks';
 import { useCurrentUser } from '../lib/user';
 
-type View = 'all' | 'mine' | 'high' | 'unassigned' | 'ai' | 'progress' | 'new' | 'waiting' | 'ready' | 'review' | 'urgent' | 'due';
-const VIEWS: View[] = ['all', 'mine', 'high', 'unassigned', 'ai', 'progress', 'new', 'waiting', 'ready', 'review', 'urgent', 'due'];
+type View = 'all' | 'mine' | 'high' | 'unassigned' | 'ai' | 'progress' | 'new' | 'waiting' | 'ready' | 'review' | 'urgent' | 'due' | 'done';
+const VIEWS: View[] = ['all', 'mine', 'high', 'unassigned', 'ai', 'progress', 'new', 'waiting', 'ready', 'review', 'urgent', 'due', 'done'];
 const SORTS = {
   priority: { by: 'priority_score', order: 'desc', label: 'Most urgent' },
   amount: { by: 'amount', order: 'desc', label: 'Highest amount' },
@@ -34,6 +35,7 @@ function matchesView(d: DisputeSummary, view: View, now: number, me: string) {
     case 'ai': return OPEN_STATUSES.includes(d.status) && d.ai_owned;
     case 'high': return OPEN_STATUSES.includes(d.status) && d.is_high_profile;
     case 'review': return d.status === 'PENDING_AI_REVIEW';
+    case 'done': return d.status === 'RESOLVED' || d.status === 'CLOSED';   // decided, settled or dismissed
     case 'new': return d.status === 'OPEN';
     case 'progress': return d.status === 'IN_PROGRESS';
     case 'waiting': return WAITING_STATUSES.includes(d.status);
@@ -46,10 +48,14 @@ function matchesView(d: DisputeSummary, view: View, now: number, me: string) {
 
 export function DisputeQueuePage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const toast = useToast();
   const now = useNow();
   const { user, isManager } = useCurrentUser();
   const [params, setParams] = useSearchParams();
-  const [distributing, setDistributing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [grid, setGrid] = useState<GridApi<DisputeSummary> | null>(null);
+  const [shown, setShown] = useState<number | null>(null);   // rows left after the table's column filters
 
   const initialView: View = VIEWS.includes(params.get('view') as View) ? (params.get('view') as View) : params.get('priority_level') === 'high' ? 'urgent' : 'all';
 
@@ -59,6 +65,12 @@ export function DisputeQueuePage() {
   const [status, setStatus] = useState(params.get('status') || 'ALL');
   const [sort, setSort] = useState<SortKey>((params.get('sort') as SortKey) in SORTS ? (params.get('sort') as SortKey) : 'priority');
   const openId = params.get('open');
+  // The sort dropdown sets the grid's sort; a header click re-sorts from there.
+  useEffect(() => {
+    if (!grid) return;
+    const { colId, sort: dir } = GRID_SORTS[sort];
+    grid.applyColumnState({ state: [{ colId, sort: dir }], defaultState: { sort: null } });
+  }, [grid, sort]);
   const dq = useDebounced(search, 250);
 
   // Keep the URL shareable.
@@ -80,11 +92,24 @@ export function DisputeQueuePage() {
     refetchInterval: 30_000,
     placeholderData: (prev) => prev,
   });
+  const sync = useMutation({
+    mutationFn: syncPayPalDisputes,
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['disputes'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboardSummary'] }),
+      ]);
+      toast('success', result.message);
+    },
+    onError: (syncError) => {
+      toast('error', syncError instanceof Error ? syncError.message : 'Could not sync PayPal disputes.');
+    },
+  });
 
   const counts = useMemo(() => {
     const list = data ?? [];
     const c = (v: View) => list.filter((d) => matchesView(d, v, now, user.name)).length;
-    return { all: list.length, mine: c('mine'), high: c('high'), unassigned: c('unassigned'), ai: c('ai'), progress: c('progress'), new: c('new'), waiting: c('waiting'), ready: c('ready'), review: c('review'), urgent: c('urgent'), due: c('due') };
+    return { all: list.length, mine: c('mine'), high: c('high'), unassigned: c('unassigned'), ai: c('ai'), progress: c('progress'), new: c('new'), waiting: c('waiting'), ready: c('ready'), review: c('review'), urgent: c('urgent'), due: c('due'), done: c('done') };
   }, [data, now, user.name]);
 
   const rows = useMemo(() => (data ?? []).filter((d) => matchesView(d, view, now, user.name)), [data, view, now, user.name]);
@@ -105,7 +130,15 @@ export function DisputeQueuePage() {
           ? 'Every case, most urgent first. Search by case, buyer, seller or transaction. Click a dispute to investigate it, or use the eye for a quick look.'
           : 'The cases you are working, most urgent first, including any a colleague has shared with you. Click one to investigate it, or use the eye for a quick look.'}
         actions={<>
-          {isManager && <Button size="sm" variant="primary" onClick={() => setDistributing(true)}><Share2 className="h-4 w-4" />Distribute cases</Button>}
+          <Button size="sm" onClick={() => sync.mutate()} loading={sync.isPending}>
+            <RefreshCw className="h-4 w-4" /> Sync PayPal
+          </Button>
+          <Button size="sm" onClick={() => setImporting(true)}>
+            <Download className="h-4 w-4" /> Import case
+          </Button>
+          <Button size="sm" onClick={() => grid?.exportDataAsCsv({ fileName: `disputes-${new Date().toISOString().slice(0, 10)}.csv`, columnKeys: ['case', 'parties', 'status', 'amount', 'due', 'owner', 'priority'] })} disabled={!grid} aria-label="Download the table as CSV">
+            <FileDown className="h-4 w-4" /> CSV
+          </Button>
           <Button size="sm" onClick={() => refetch()} aria-label="Refresh disputes">
             <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} /> Refresh
           </Button>
@@ -118,7 +151,7 @@ export function DisputeQueuePage() {
           onChange={setView}
           options={[
             { value: 'all', label: 'All', count: counts.all },
-            ...(isManager ? [{ value: 'mine' as View, label: 'Your cases', count: counts.mine }, { value: 'high' as View, label: 'High profile', count: counts.high }, { value: 'unassigned' as View, label: 'Unassigned', count: counts.unassigned }, { value: 'ai' as View, label: 'With the AI Agent', count: counts.ai }] : []),
+            ...(isManager ? [{ value: 'high' as View, label: 'High profile', count: counts.high }] : []),
             { value: 'new', label: 'New', count: counts.new },
             { value: 'waiting', label: 'Waiting on replies', count: counts.waiting },
             { value: 'progress', label: 'In progress', count: counts.progress },
@@ -126,6 +159,7 @@ export function DisputeQueuePage() {
             { value: 'review', label: 'With AI review', count: counts.review },
             { value: 'urgent', label: 'Urgent', count: counts.urgent },
             { value: 'due', label: 'Due soon', count: counts.due },
+            { value: 'done', label: 'Completed', count: counts.done },
           ]}
         />
 
@@ -169,7 +203,7 @@ export function DisputeQueuePage() {
       {error ? (
         <ErrorState message="Couldn't load disputes." onRetry={() => refetch()} />
       ) : (
-        <Card className="overflow-hidden">
+        <Card className="overflow-hidden p-0">
           {isLoading ? (
             <div className="space-y-px">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[76px] rounded-none" />)}</div>
           ) : rows.length === 0 ? (
@@ -180,55 +214,18 @@ export function DisputeQueuePage() {
               action={<Button onClick={clearAll}>Clear filters</Button>}
             />
           ) : (
-            <ul className={cn('divide-y divide-line transition-opacity', isFetching && 'opacity-80')}>
-              {rows.map((d) => (
-                <li key={d.id} className={cn('flex items-center transition hover:bg-white/[.03]', openId === d.id && 'bg-brand/[.06]')}>
-                  {/* Clicking a dispute opens it in Investigation. The eye is a quick peek that doesn't leave the list. */}
-                  <button
-                    onClick={() => navigate(`/investigate/${d.id}`)}
-                    className="group flex min-w-0 flex-1 items-center gap-4 px-5 py-4 text-left"
-                  >
-                    <ScoreRing score={d.priority_score} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <span className="font-mono text-[13px] font-semibold text-white">{d.id}</span>
-                        <span className="text-[13px] text-muted">{reasonLabel(d.reason)}</span>
-                        {d.is_high_profile && <Badge tone="warn">High profile</Badge>}
-                      </div>
-                      <p className="mt-0.5 truncate text-sm text-slate-300">
-                        {d.buyer_reference ?? 'Buyer'} <span className="text-muted">vs {d.merchant_reference ?? 'Seller'}</span>
-                        {d.buyer_claim && <span className="text-muted"> · “{d.buyer_claim}”</span>}
-                      </p>
-                      <p className="mt-0.5 text-xs text-muted">{d.ai_owned ? 'With the AI Agent. Nobody took it in time.' : d.assigned_to ? (d.assigned_to === user.name ? 'Yours' : `Owner: ${d.assigned_to}`) : 'Unassigned'}{(d.collaborators ?? []).length > 0 && <span> · Shared with {d.collaborators.join(', ')}</span>}</p>
-                    </div>
-                    <div className="hidden w-40 flex-col items-start gap-1.5 lg:flex">
-                      <StatusBadge status={d.status} />
-                      <EvidenceBadge status={d.evidence_status} />
-                    </div>
-                    <div className="hidden w-36 text-right md:block">
-                      <div className="text-sm font-semibold text-white tabular">{money(d.amount, d.currency)}</div>
-                      <div className="mt-1 flex justify-end"><DecideBy status={d.status} due={d.response_due_date} outcome={d.outcome} /></div>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-muted transition group-hover:translate-x-0.5 group-hover:text-white" />
-                  </button>
-                  {isManager && OPEN_STATUSES.includes(d.status) && <div className="mr-2 hidden shrink-0 md:block"><AssignSelect disputeId={d.id} assignedTo={d.assigned_to} /></div>}
-                  <button
-                    onClick={() => setOpen(d.id)}
-                    aria-label={`Quick view ${d.id}`}
-                    title="Quick view"
-                    className="mr-4 shrink-0 rounded-lg p-2 text-muted transition hover:bg-white/5 hover:text-white"
-                  >
-                    <Eye className="h-4 w-4" />
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className={cn('transition-opacity', isFetching && 'opacity-80')}>
+              <DisputeGrid
+                rows={rows} isManager={isManager} me={user.name} openId={openId} sort={sort}
+                onOpenCase={(id) => navigate(`/investigate/${id}`)} onQuickView={setOpen} onReady={setGrid} onShownChange={setShown}
+              />
+            </div>
           )}
         </Card>
       )}
-      {!isLoading && rows.length > 0 && <p className="text-[13px] text-muted">Showing {rows.length} of {counts.all} disputes</p>}
+      {!isLoading && rows.length > 0 && <p className="text-[13px] text-muted">Showing {Math.min(shown ?? rows.length, rows.length)} of {counts.all} disputes</p>}
 
-      <DistributeDialog open={distributing} onClose={() => setDistributing(false)} />
+      <ImportCaseDialog open={importing} onClose={() => setImporting(false)} onImported={(id) => setOpen(id)} />
       <PreviewDrawer id={openId} onClose={() => setOpen(null)} onOpenCase={(id) => navigate(`/investigate/${id}`)} />
     </>
   );

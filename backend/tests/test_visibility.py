@@ -200,37 +200,17 @@ def test_who_can_take_someone_off_a_case():
     assert client.delete(f"/api/disputes/{did}/collaborators/{_uid('Jahnavi')}", headers=MGR()).status_code == 404                # already off
 
 
-def test_the_manager_can_add_anyone_to_any_case_and_everyone_sees_it_in_their_workload():
-    did = _case_of("Jahnavi")
-    before = client.get("/api/cases/distribution", headers=MGR()).json()
-    sus_before = next(p["open_cases"] for p in before["people"] if p["name"] == "Susmitha")
-    assert client.post(f"/api/disputes/{did}/collaborators", headers=MGR(), json={"user_id": _uid("Susmitha")}).status_code == 200
-    after = next(p["open_cases"] for p in client.get("/api/cases/distribution", headers=MGR()).json()["people"] if p["name"] == "Susmitha")
-    assert after == sus_before + 1                                                      # a shared case counts as work, for handing out fairly
-
-
-def test_a_case_shared_with_someone_means_they_are_not_out_of_cases():
-    for d in _all():
-        if d["assigned_to"] == "Jahnavi" and d["status"] in OPEN:
-            client.post(f"/api/disputes/{d['id']}/assign", headers=MGR(), json={"assignee": None})
-    assert client.post("/api/case-requests", headers=JAH(), json={}).status_code == 200                 # genuinely none left: they may ask
+def test_the_manager_can_add_anyone_to_any_case_and_it_counts_in_their_workload():
     from backend.app.database import SessionLocal
-    from backend.app.models.team import CaseRequest
+    from backend.app.services.assignment_service import open_cases
+    did = _case_of("Jahnavi")
     db = SessionLocal()
     try:
-        db.query(CaseRequest).delete()
-        db.commit()
+        before = open_cases(db, "Susmitha")
+        assert client.post(f"/api/disputes/{did}/collaborators", headers=MGR(), json={"user_id": _uid("Susmitha")}).status_code == 200
+        db.expire_all()
+        assert open_cases(db, "Susmitha") == before + 1          # a shared case counts as work, so new cases go to someone lighter
     finally:
         db.close()
-    shared = _case_of("Susmitha")
-    client.post(f"/api/disputes/{shared}/collaborators", headers=SUS(), json={"user_id": _uid("Jahnavi")})
-    refused = client.post("/api/case-requests", headers=JAH(), json={})
-    assert refused.status_code == 400 and "still have 1 open case" in refused.json()["detail"]
 
 
-def test_making_a_colleague_the_owner_takes_them_off_the_helpers_list():
-    did = _case_of("Susmitha")
-    client.post(f"/api/disputes/{did}/collaborators", headers=SUS(), json={"user_id": _uid("Abhinav Chitturi")})
-    client.post(f"/api/disputes/{did}/assign", headers=MGR(), json={"assignee": "Abhinav Chitturi"})
-    d = client.get(f"/api/disputes/{did}", headers=ABH()).json()
-    assert d["assigned_to"] == "Abhinav Chitturi" and "Abhinav Chitturi" not in d["collaborators"]

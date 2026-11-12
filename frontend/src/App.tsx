@@ -15,6 +15,7 @@ import { AuditTrailPage } from './pages/AuditTrailPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ManagerReviewPage } from './pages/ManagerReviewPage';
 import { TeamPage } from './pages/TeamPage';
+import { AITrainingPage } from './pages/AITrainingPage';
 import { LoginPage } from './pages/LoginPage';
 import { BlockedScreen } from './pages/BlockedScreen';
 import { useSession, useSessionKey } from './lib/auth';
@@ -67,6 +68,7 @@ export function App() {
             <Route path="messages" element={<MessagesPage />} />
             <Route path="manager" element={<ManagerReviewPage />} />
             <Route path="team" element={<TeamPage />} />
+            <Route path="training" element={<AITrainingPage />} />
             <Route path="investigate/:disputeId" element={<CaseInvestigationPage />} />
             <Route path="similar" element={<SimilarCasesPage />} />
             <Route path="patterns" element={<PatternInsightsPage />} />

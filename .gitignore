@@ -51,3 +51,6 @@ dist/
 *.swo
 .DS_Store
 Thumbs.db
+
+# PayPal sandbox script: the saved buyer token
+scripts/.paypal_sandbox_state.json

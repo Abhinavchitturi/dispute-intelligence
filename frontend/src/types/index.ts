@@ -37,6 +37,9 @@ export interface DisputeSummary {
   decided_by: 'INVESTIGATOR' | 'AI' | 'MANAGER' | null;
   ai_verdict: 'APPROVE' | 'OVERTURN' | 'DIRECT' | null;   // DIRECT: the AI Agent handled the whole case itself
   ai_rationale: string | null;
+  conflict_due_at?: string | null;
+  conflict_by?: string | null;
+  buyer_silent?: boolean;
   manager_assigned: string | null;
   parent_dispute_id: string | null;
   appeal_number: number | null;
@@ -58,6 +61,7 @@ export interface ClaimPoint {
   on_file: boolean;
   evidence_type: string | null;
   party: 'SELLER' | 'BUYER' | null;
+  concern?: string | null;   // on file, but doesn't hold up
 }
 
 export interface TransactionInfo {
@@ -345,6 +349,7 @@ export interface EvidenceRequestOptions {
 
 /** One line of the per-side evidence checklist. Missing items say why. */
 export interface EvidenceLine {
+  concern?: string | null;   // on file, but doesn't hold up (e.g. footage from the wrong day)
   evidence_type: string;
   label: string;
   party: 'SELLER' | 'BUYER' | null;
@@ -401,12 +406,16 @@ export interface TeamMember {
 export interface CaseFlag {
   id: string; dispute_id: string; raised_by: string; points: string; status: 'OPEN' | 'UPHELD' | 'OVERTURNED'; created_at: string; due_at: string | null;
   resolved_by: string | null; resolved_at: string | null; resolution_note: string | null;
-  investigator_outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null; ai_outcome: string | null; ai_rationale: string | null; ai_verdict: string | null;
+  investigator_outcome: 'BUYER_FAVOR' | 'SELLER_FAVOR' | null; investigator_reason?: string | null; ai_outcome: string | null; ai_rationale: string | null; ai_verdict: string | null;
 }
 
 export interface TrainingRow {
   review_id: string; dispute_id: string; model: string | null; investigator_decision: string; ai_verdict: string; ai_outcome: string; ai_rationale: string;
   correct_outcome: string; correction_note: string; corrected_by: string; corrected_at: string; source: 'MANAGER_REVIEW' | 'INVESTIGATOR_FLAG'; already_exported: boolean;
+  case?: { reason: string; amount: number; currency: string; buyer_claim: string | null; investigator_reason: string | null } | null;
+  evidence?: Record<'seller' | 'buyer' | 'records', { type: string; label: string; status: 'PROVIDED' | 'MISSING'; description: string | null; concern: string | null }[]>;
+  lesson?: { id: string; summary: string; evidence_types: string[]; doubtful_types: string[]; times_applied: number; applied_to: string[]; created_at: string } | null;
+  ai_analysis?: { reasoning?: string; ai_decision?: string; model?: string; key_evidence?: { supporting_evidence?: string[]; contradicting_evidence?: string[] } } | null;
 }
 
 export interface CaseEmail { id: string; direction: 'OUT' | 'IN'; to: string; from: string; subject: string; body: string; party: 'SELLER' | 'BUYER' | null; status: string; created_at: string }

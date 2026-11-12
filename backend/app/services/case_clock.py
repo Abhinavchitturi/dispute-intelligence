@@ -1,17 +1,23 @@
-"""The 5-day clock on every case.
+"""The clock on every case.
+
+A new complaint is assigned at once to the investigator with the fewest open cases. Nobody hands cases out by hand.
+Cases never go to the AI Agent for want of an owner: a person always ends up with them.
 
 Each case has a deadline. As it nears, the priority score climbs, so an unassigned case that is running out of time rises to the top
-of the manager's screen. A case nobody has taken by its deadline goes to the AI Agent, which handles the whole case, and the manager is told.
+of the manager's screen.
 """
 import json
+import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from backend.app.config import settings
 from backend.app.models.dispute import Dispute
+from backend.app.models.team import INVESTIGATOR, User
 from backend.app.services.audit_service import AuditService
 from backend.app.services.message_service import OPEN_STATUSES
 from backend.app.services.priority_service import calculate_priority_score
@@ -36,31 +42,18 @@ def refresh_scores(db: Session, now: Optional[datetime] = None) -> int:
     return n
 
 
-def hand_over_to_ai(db: Session, now: Optional[datetime] = None) -> int:
-    """Every open case that nobody took, and whose deadline has passed, goes to the AI Agent. Each one raises an alert for the manager."""
-    now = now or datetime.utcnow()
-    taken = 0
-    q = db.query(Dispute).filter(Dispute.status.in_(OPEN_STATUSES), Dispute.assigned_to.is_(None), Dispute.response_due_date.isnot(None), Dispute.response_due_date <= now)
-    for d in q.all():
-        d.assigned_to, d.ai_owned, d.ai_owned_at = settings.AI_AGENT_NAME, True, now
-        AuditService.record_event(
-            db=db, dispute_id=d.id, actor="system", action="HANDED_TO_AI", status="SUCCESS", source=d.source,
-            result_summary=f"Nobody took this case in its {settings.CASE_WINDOW_DAYS} days, so the {settings.AI_AGENT_NAME} is handling the whole case.",
-        )
-        StrikeService.open_alert(
-            db, "AI_TAKEOVER", f"{settings.AI_AGENT_NAME} took {d.id}",
-            f"Nobody took {d.id} ({d.currency} {d.amount:,.2f}) in its {settings.CASE_WINDOW_DAYS} days. The {settings.AI_AGENT_NAME} is now handling the whole case. You can give it to someone yourself, or overturn the AI Agent's decision.",
-            dispute_id=d.id,
-        )
-        taken += 1
-    return taken
+def auto_assign_stale(db: Session, now: Optional[datetime] = None) -> int:
+    """Any open case without an owner goes to the least-busy investigator straight away. (New cases are assigned the moment
+    they arrive; this catches the rest, such as cases waiting while every investigator was blocked.)"""
+    from backend.app.services.assignment_service import auto_assign
+    return auto_assign(db)
 
 
 def tick(db: Session, now: Optional[datetime] = None) -> dict:
     scored = refresh_scores(db, now)
-    taken = hand_over_to_ai(db, now)
+    assigned = auto_assign_stale(db, now)
     db.commit()
-    return {"rescored": scored, "handed_to_ai": taken}
+    return {"rescored": scored, "auto_assigned": assigned}
 
 
 def tick_if_due(db: Session, every_seconds: float = 30.0) -> None:

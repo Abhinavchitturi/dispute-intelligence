@@ -1,25 +1,26 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Bot, CheckCircle2, ShieldCheck } from 'lucide-react';
-import { fetchDisputes, fetchFlags, fetchTraining } from '../api/client';
+import { fetchDisputes, fetchFlags } from '../api/client';
 import { Badge, Button, Card, EmptyState, ErrorState, PageHeader, Segmented, Skeleton } from '../components/ui/kit';
 import { FlagCard, ManagerReviewPanel, ReviseDecision } from '../components/ManagerPanels';
 import { money, outcomeMeta, outcomeText, parseServerDate, reasonLabel } from '../lib/format';
 import { useCurrentUser } from '../lib/user';
 
-type Tab = 'waiting' | 'flags' | 'decided' | 'training';
+type Tab = 'waiting' | 'flags' | 'decided';
 
 /** Where a manager looks over everything below them: decisions waiting on the AI, the investigators' flags, decided cases, and what the AI is being taught. */
 export function ManagerReviewPage() {
   const navigate = useNavigate();
   const { isManager } = useCurrentUser();
-  const [tab, setTab] = useState<Tab>('waiting');
+  const [params] = useSearchParams();
+  const fromAddress = params.get('tab');
+  const [tab, setTab] = useState<Tab>((['waiting', 'flags', 'decided'] as string[]).includes(fromAddress ?? '') ? (fromAddress as Tab) : 'waiting');
 
   const waiting = useQuery({ queryKey: ['disputes', 'aiPending'], queryFn: () => fetchDisputes({ status: 'PENDING_AI_REVIEW', sort_by: 'priority_score', sort_order: 'desc' }), refetchInterval: 15_000, enabled: isManager });
   const flags = useQuery({ queryKey: ['flags', 'all'], queryFn: () => fetchFlags(), refetchInterval: 15_000, enabled: isManager });
   const decided = useQuery({ queryKey: ['disputes', 'managerDecided'], queryFn: () => fetchDisputes({ status: 'RESOLVED', sort_by: 'updated_at', sort_order: 'desc' }), enabled: isManager && tab === 'decided' });
-  const training = useQuery({ queryKey: ['training'], queryFn: fetchTraining, enabled: isManager && tab === 'training' });
 
   if (!isManager) {
     return <Card><EmptyState icon={<ShieldCheck className="h-6 w-6" />} title="Managers only" hint="Managers review decisions, deal with flags and correct the AI reviewer." /></Card>;
@@ -39,7 +40,6 @@ export function ManagerReviewPage() {
           { value: 'waiting', label: 'With the AI', count: waiting.data?.length ?? 0 },
           { value: 'flags', label: 'Flags', count: openFlags.length },
           { value: 'decided', label: 'Decided cases' },
-          { value: 'training', label: 'AI feedback' },
         ]}
       />
 
@@ -94,26 +94,6 @@ export function ManagerReviewPage() {
         </Card>
       )}
 
-      {tab === 'training' && (
-        <Card className="p-6">
-          <p className="mb-4 flex items-start gap-2 text-[13px] text-muted"><Bot className="mt-0.5 h-4 w-4 shrink-0" />Every time you overturn the AI, the right answer and your reasons are saved here. The AI team pulls these to train it. Nothing here changes the AI by itself.</p>
-          {training.isLoading ? <Skeleton className="h-32" /> : !training.data?.length ? <p className="text-sm text-muted">No corrections yet.</p> : (
-            <ul className="space-y-3" aria-label="AI feedback">
-              {training.data.map((r) => (
-                <li key={r.review_id} className="rounded-xl border border-line bg-raised/40 p-4 text-[13px]">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono font-semibold text-white">{r.dispute_id}</span>
-                    <Badge tone={r.already_exported ? 'neutral' : 'info'}>{r.already_exported ? 'Pulled by the AI team' : 'Not pulled yet'}</Badge>
-                    <span className="text-xs text-muted">{r.source === 'INVESTIGATOR_FLAG' ? 'from an investigator’s flag' : 'from your review'} · {parseServerDate(r.corrected_at).toLocaleDateString()}</span>
-                  </div>
-                  <p className="mt-2 text-slate-300"><span className="text-muted">AI said: </span>{outcomeMeta(r.ai_outcome)?.label} <span className="text-muted">({r.ai_rationale})</span></p>
-                  <p className="mt-1 text-slate-300"><span className="text-muted">Correct answer: </span>{outcomeMeta(r.correct_outcome)?.label}. {r.correction_note}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      )}
     </>
   );
 }

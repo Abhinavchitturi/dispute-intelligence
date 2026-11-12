@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Gavel, Handshake, Inbox, LogOut, Mail, Paperclip, Play, Store, User } from 'lucide-react';
+import { Gavel, Inbox, LogOut, Mail, Paperclip, Play, Store, User } from 'lucide-react';
 import { declareFromParty, fetchDisputeDetail, fetchDisputeMessages, markMessagesRead, recordReply, simulateEmailReply, simulateReply } from '../api/client';
 import { DisputeMessage } from '../types';
 import { Badge, Button, EmptyState, ErrorState, Input, Skeleton, useToast } from './ui/kit';
@@ -13,7 +13,7 @@ const PARTY_NAME: Record<Party, string> = { SELLER: 'Seller', BUYER: 'Buyer' };
 const REFRESH_KEYS = ['messageThreads', 'disputeDetail', 'disputeTimeline', 'dashboardSummary', 'disputes', 'urgentDisputes', 'auditEvents', 'evidenceSummary'];
 const isDecision = (m: DisputeMessage) => m.action_type === 'DECIDE_FOR_BUYER' || m.action_type === 'DECIDE_FOR_SELLER';
 /** Sent to both sides with the same words: a decision, or PayPal closing a settled or dismissed case. */
-const isBroadcast = (m: DisputeMessage) => isDecision(m) || m.action_type === 'DISPUTE_SETTLED' || m.action_type === 'DISPUTE_DISMISSED';
+const isBroadcast = (m: DisputeMessage) => isDecision(m) || m.action_type === 'DISPUTE_DISMISSED';
 
 /**
  * An emailed reply, waiting to be gone through. The seller and buyer aren't on this app, so a person at PayPal ticks
@@ -102,8 +102,8 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
     onError: (e: Error) => toast('error', e.message),
   });
   const declare = useMutation({
-    mutationFn: (v: { party: Party; kind: 'SETTLED' | 'WITHDRAWN' }) => declareFromParty(disputeId, v.party, v.kind),
-    onSuccess: (_m, v) => { toast('info', v.kind === 'WITHDRAWN' ? 'The buyer withdrew the claim.' : `The ${PARTY_NAME[v.party].toLowerCase()} says it is settled.`); refreshAll(); },
+    mutationFn: (v: { party: Party; kind: 'WITHDRAWN' }) => declareFromParty(disputeId, v.party, v.kind),
+    onSuccess: () => { toast('info', 'The buyer withdrew the claim.'); refreshAll(); },
     onError: (e: Error) => toast('error', e.message),
   });
 
@@ -120,14 +120,11 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
   const ready = !pending.length && !decided && !inReview && disputeStatus === 'UNDER_REVIEW';
   const result = outcomeMeta(outcome);
   const d = detail.data;
-  const sellerSettled = !!d?.seller_settled_at;
-  const buyerSettled = !!d?.buyer_settled_at;
 
   const column = (party: Party) => {
     const mine = chatFor(messages, party);
     const waitingOn = pending.filter((m) => m.counterparty === party);
     const Icon = party === 'SELLER' ? Store : User;
-    const said = party === 'SELLER' ? sellerSettled : buyerSettled;
     const who = PARTY_NAME[party].toLowerCase();
     const canSimulate = !decided && d?.source === 'synthetic';
     return (
@@ -140,7 +137,6 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
               <p className="text-xs text-muted">{party === 'SELLER' ? d?.merchant_reference ?? 'Seller' : d?.buyer_reference ?? 'Buyer'}</p>
             </div>
           </div>
-          {said && <Badge tone="info" dot>Says it's settled</Badge>}
         </header>
 
         <ol className="flex-1 space-y-3 p-4" aria-label={`${PARTY_NAME[party]} conversation`}>
@@ -238,9 +234,6 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
         {canSimulate && (
           <footer className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3" aria-label={`Demo controls for the ${who}`}>
             <span className="text-xs text-muted">Demo:</span>
-            <Button size="sm" variant="ghost" disabled={said || declare.isPending} onClick={() => declare.mutate({ party, kind: 'SETTLED' })}>
-              <Handshake className="h-3.5 w-3.5" />{PARTY_NAME[party]} says settled
-            </Button>
             {party === 'BUYER' && (
               <Button size="sm" variant="ghost" disabled={declare.isPending} onClick={() => declare.mutate({ party, kind: 'WITHDRAWN' })}>
                 <LogOut className="h-3.5 w-3.5" />Buyer withdraws claim
@@ -252,20 +245,9 @@ export function MessageThread({ disputeId, disputeStatus, outcome, onTakeAction 
     );
   };
 
-  const oneSideSettled = !decided && (sellerSettled !== buyerSettled);
 
   return (
     <div className="space-y-4">
-      {oneSideSettled && (
-        <div role="status" className="flex items-start gap-3 rounded-2xl border border-sky-400/25 bg-sky-400/[.07] p-4 text-sm text-sky-100 animate-fade-in">
-          <Handshake aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
-          <span>
-            <span className="font-medium">The {sellerSettled ? 'seller' : 'buyer'} says this was settled outside PayPal.</span>{' '}
-            It is not settled until the {sellerSettled ? 'buyer' : 'seller'} confirms too. Until then the case continues.
-          </span>
-        </div>
-      )}
-
       <div className="grid items-start gap-4 lg:grid-cols-2">{column('SELLER')}{column('BUYER')}</div>
 
       {ready && (

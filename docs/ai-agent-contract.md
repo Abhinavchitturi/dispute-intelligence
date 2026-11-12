@@ -120,3 +120,17 @@ When a decision is made, the seller and the buyer each get an email that lists, 
 - The AI's decision is final straight away. The investigator gets a strike, and the manager gets an `AI_OVERTURN` alert to read the case and evidence.
 - The investigator can question the decision with reasons. The manager then gets a `FLAG` alert ("Conflict raised by …") due in 2 days.
 - If the manager agrees with the AI, the strike stays and the investigator gets the reasoning plus a warning. If the manager disagrees, the strike is removed, the investigator is congratulated, and the correction appears in `GET /api/ai-agent/feedback` for training.
+
+## When the buyer never answers
+- If PayPal asked the buyer for evidence and the deadline passed with no reply, the case is dismissed. It is not decided for the seller, even if the seller sent strong proof.
+- `GET /api/ai-agent/cases/{id}` includes `buyer_silent: true` for such a case. The AI Agent can end it with `POST /api/ai-agent/cases/{id}/decide` and `{"outcome": "DISMISSED", ...}`, which is refused unless the buyer really was silent.
+- `POST /api/disputes/{id}/ai-review` answers `ai_decision: "DISMISS_NO_RESPONSE"` for such a case. It returns `AGREES` for a proposed `DISMISSED`, and `DISAGREES` for a buyer's or seller's favor.
+
+## Appeals and strikes
+- Only the buyer can appeal a decision. A seller's email to the appeals address is refused, and the seller's decision email does not mention appeals.
+- A manager can reset an investigator's strikes at any time with `POST /api/team/{user_id}/reset-strikes`. It also unblocks the account.
+
+## Cases without an owner, and how the AI is trained
+- A case nobody takes is never given to the AI Agent. Every new case is assigned at once to the investigator with the fewest open cases.
+- When a manager presses **Train the AI** on a reported case, or revises an AI ruling, the correction is stored as a training example. `GET /api/ai-agent/feedback` returns each one once, with the case facts, the evidence (doubtful items marked), the investigator's reasons, the AI's own analysis, the AI's outcome, the correct outcome and the manager's reasons. `GET /api/ai-training` shows the same list to managers without marking anything as pulled.
+- The built-in reviewer does learn: each correction is also saved as a lesson (same kind of dispute, same evidence on file, same items not holding up, and the right ruling). New cases that match exactly follow the lesson, and say which case taught it. The real agent can ignore this and train on `/api/ai-agent/feedback` instead.

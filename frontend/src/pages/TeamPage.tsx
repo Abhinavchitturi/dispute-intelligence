@@ -2,11 +2,9 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Ban, CheckCircle2, ShieldCheck, Users } from 'lucide-react';
-import { fetchTeam, unblockUser } from '../api/client';
+import { fetchTeam, resetStrikes, unblockUser } from '../api/client';
 import { Badge, Button, Card, EmptyState, ErrorState, PageHeader, Segmented, Skeleton, Textarea, useToast } from '../components/ui/kit';
 import { UsersPanel } from '../components/UsersPanel';
-import { RequestsPanel } from '../components/RequestsPanel';
-import { fetchCaseRequests } from '../api/client';
 import { cn, parseServerDate } from '../lib/format';
 import { useCurrentUser } from '../lib/user';
 import { TeamMember } from '../types';
@@ -42,22 +40,41 @@ function Unblock({ m }: { m: TeamMember }) {
   );
 }
 
+/** A manager can wipe an investigator's strikes whenever they like. */
+function ResetStrikes({ m }: { m: TeamMember }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState('');
+  const reset = useMutation({
+    mutationFn: () => resetStrikes(m.id, note.trim() || undefined),
+    onSuccess: () => { toast('success', `${m.name}'s strikes are reset to zero.`); setAsking(false); setNote(''); ['team', 'notifications', 'dashboardSummary'].forEach((k) => qc.invalidateQueries({ queryKey: [k] })); },
+    onError: (e: Error) => toast('error', e.message),
+  });
+  if (!asking) return <Button size="sm" onClick={() => setAsking(true)}>Reset strikes</Button>;
+  return (
+    <div className="flex w-full flex-col gap-2 sm:w-80">
+      <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} aria-label={`Note for resetting ${m.name}'s strikes`} placeholder="Optional note. They will see it." />
+      <div className="flex gap-2"><Button size="sm" variant="primary" loading={reset.isPending} onClick={() => reset.mutate()}>Reset to zero</Button><Button size="sm" variant="ghost" onClick={() => setAsking(false)}>Cancel</Button></div>
+    </div>
+  );
+}
+
 /** The investigators: how many strikes each has, who is blocked, and the cases behind every strike. */
 export function TeamPage() {
   const navigate = useNavigate();
   const { isManager } = useCurrentUser();
   const [params, setParams] = useSearchParams();
-  const tab = (['strikes', 'users', 'requests'].includes(params.get('tab') ?? '') ? params.get('tab') : 'strikes') as 'strikes' | 'users' | 'requests';
-  const setTab = (t: 'strikes' | 'users' | 'requests') => setParams(t === 'strikes' ? {} : { tab: t }, { replace: true });
-  const waiting = useQuery({ queryKey: ['caseRequests', 'open'], queryFn: () => fetchCaseRequests('OPEN'), refetchInterval: 20_000, enabled: isManager, retry: 0 });
+  const tab = (params.get('tab') === 'users' ? 'users' : 'strikes') as 'strikes' | 'users';
+  const setTab = (t: 'strikes' | 'users') => setParams(t === 'strikes' ? {} : { tab: t }, { replace: true });
   const team = useQuery({ queryKey: ['team'], queryFn: fetchTeam, refetchInterval: 20_000, enabled: isManager });
 
   if (!isManager) return <Card><EmptyState icon={<ShieldCheck className="h-6 w-6" />} title="Managers only" hint="Only managers see the team and unblock accounts." /></Card>;
   return (
     <>
       <PageHeader title="Team" subtitle="Manage everyone who signs in, and keep an eye on strikes. An investigator gets a strike when the AI reviewer overturns their decision. You are alerted at each set of strikes, and an account is blocked at the limit until you unblock it." />
-      <Segmented value={tab} onChange={setTab} options={[{ value: 'strikes', label: 'Strikes' }, { value: 'requests', label: 'Case requests', count: waiting.data?.length ?? 0 }, { value: 'users', label: 'All users' }]} />
-      {tab === 'requests' ? <RequestsPanel /> : tab === 'users' ? <UsersPanel /> : team.isError ? <ErrorState message="Couldn't load the team." onRetry={() => team.refetch()} /> : team.isLoading ? <Skeleton className="h-64 rounded-2xl" /> : !team.data?.length ? (
+      <Segmented value={tab} onChange={setTab} options={[{ value: 'strikes', label: 'Strikes' }, { value: 'users', label: 'All users' }]} />
+      {tab === 'users' ? <UsersPanel /> : team.isError ? <ErrorState message="Couldn't load the team." onRetry={() => team.refetch()} /> : team.isLoading ? <Skeleton className="h-64 rounded-2xl" /> : !team.data?.length ? (
         <Card><EmptyState icon={<Users className="h-6 w-6" />} title="No investigators" /></Card>
       ) : (
         <ul className="space-y-4" aria-label="Investigators">
@@ -73,7 +90,9 @@ export function TeamPage() {
                     <p className="text-[13px] text-muted">{m.open_cases} open case{m.open_cases === 1 ? '' : 's'}{m.blocked_reason && ` · ${m.blocked_reason}`}</p>
                     <StrikeMeter m={m} />
                   </div>
-                  {m.is_blocked && <div className="flex items-start gap-3"><Ban aria-hidden className="mt-1 h-5 w-5 text-rose-300" /><Unblock m={m} /></div>}
+                  {m.is_blocked
+                    ? <div className="flex items-start gap-3"><Ban aria-hidden className="mt-1 h-5 w-5 text-rose-300" /><Unblock m={m} /></div>
+                    : m.strikes > 0 && <ResetStrikes m={m} />}
                 </div>
                 {m.history.length > 0 && (
                   <details className="mt-4">

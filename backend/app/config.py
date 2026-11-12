@@ -15,14 +15,25 @@ class Settings(BaseSettings):
     PAYPAL_CLIENT_ID: Optional[str] = None
     PAYPAL_CLIENT_SECRET: Optional[str] = None
     PAYPAL_WEBHOOK_ID: Optional[str] = None
+    # In sandbox mode, how often to pull new disputes from PayPal (a buyer's report in the Resolution Center). 0 turns it off.
+    PAYPAL_POLL_SECONDS: int = 10
+    # PayPal case IDs the automatic sync leaves out (old test cases), comma-separated. Import case still brings one in.
+    PAYPAL_HIDDEN_CASES: str = ""
     
     # AI Provider
-    AI_PROVIDER: str = "none"  # "none", "gemini", "openai", "anthropic"
+    AI_PROVIDER: str = "gemini"  # "none", "gemini", "openai", "anthropic"
     AI_API_KEY: Optional[str] = None
-    AI_MODEL: str = "gemini-1.5-pro"
+    AI_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: Optional[str] = "gemini-3.5-flash-lite"
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-4o-mini"
     
-    # Demo mode: seconds before a simulated PayPal/buyer reply arrives
+    # Seconds before a simulated seller/buyer reply arrives
     DEMO_REPLY_DELAY_SECONDS: int = 20
+    # Sandbox cases too: the seller and buyer are test accounts that never really answer, so their replies are simulated.
+    # Turn off to wait for real emailed replies instead.
+    SIMULATE_REPLIES: bool = True
 
     # Security
     SECRET_KEY: str = "resolveiq-hackathon-local-secret-key-38912"
@@ -41,6 +52,9 @@ class Settings(BaseSettings):
     # Every case has this long to be dealt with. The priority score climbs as the deadline closes in, and a case nobody has taken
     # by its deadline is handed to the AI Agent to handle from start to finish.
     CASE_WINDOW_DAYS: int = 5
+    AI_AUTO_REVIEW: bool = True                 # the AI reviewer rules by itself on every decision waiting for review
+    AI_REVIEW_DELAY_SECONDS: int = 30           # the AI rules the moment a decision is sent. This is only how long the background sweep waits before catching one that was missed
+    PUBLIC_URL: str = "http://localhost:8000"   # where the "open a new case" link in a dismissal email points
     AI_AGENT_NAME: str = "AI Agent"
 
     # High-profile cases go to the manager: any case for this much money or more. (Price only. A score keeps changing.)
@@ -53,7 +67,15 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USERNAME: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
-    ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000"
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://localhost:8001,http://127.0.0.1:8001"
+
+    @property
+    def effective_gemini_api_key(self) -> Optional[str]:
+        return self.GEMINI_API_KEY or self.AI_API_KEY
+
+    @property
+    def effective_gemini_model(self) -> str:
+        return self.GEMINI_MODEL or self.AI_MODEL or "gemini-3.5-flash-lite"
 
     @property
     def cors_origins(self) -> List[str]:

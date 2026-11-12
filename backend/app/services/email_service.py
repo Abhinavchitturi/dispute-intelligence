@@ -83,17 +83,41 @@ def appeal_text(d: Dispute, ev=None, why: str = "") -> str:
     )
 
 
+def _why_buyer_lost(ev) -> str:
+    """What was wrong with the buyer's side: evidence that didn't hold up, then evidence that never came."""
+    lines = [f"  - {i['label']}: {i['concern']}" for i in ev["buyer"] if i["status"] == "PROVIDED" and i.get("concern")]
+    lines += [f"  - {i['label']}: we did not receive it." for i in ev["buyer"] if i["status"] == "MISSING"]
+    return "\n".join(lines) if lines else "  - The evidence you sent did not outweigh the seller's proof."
+
+
+def buyer_loss_text(d: Dispute, ev=None) -> str:
+    """What a buyer is told when the seller wins: why, in terms of the seller's proof (named, not attached), and how to ask for a closer look."""
+    ev = ev or evidence_summary.build(d)
+    return (
+        f"Your dispute {d.id} ({d.currency} {d.amount:,.2f}) has been decided in the seller's favor.\n\n"
+        f"Why: the seller provided valuable evidence:\n{_list(ev['seller'])}\n\n"
+        f"Why your claim did not succeed:\n{_why_buyer_lost(ev)}\n\n"
+        "(The items are listed by name only. The documents themselves are not attached.)\n\n"
+        f"If you are still unhappy with this decision, contact us for a detailed scrutiny: email {settings.APPEALS_EMAIL} and include {d.id} in the subject. "
+        "When we receive your email we will open a new case for a different investigator, with a manager working alongside them."
+    )
+
+
 def decision_emails(db: Session, d: Dispute, outcome: str, revised: bool = False, note: Optional[str] = None) -> List[Email]:
-    """One to the seller and one to the buyer. They list what each side sent, by name only, and say how to ask for a second look."""
+    """One to the seller and one to the buyer. Only the buyer is told how to ask for a closer look, and only when they lost: the seller can't appeal."""
     ev = evidence_summary.build(d)
     side = OUTCOME_WORDS.get(outcome, "a final outcome")
     lead = ("We have revised our decision on" if revised else "We have decided") + f" dispute {d.id} ({d.currency} {d.amount:,.2f}) in {side}."
     why = f"\nWhy it was revised: {note.strip()}\n" if revised and note and note.strip() else ""
-    body_tail = "\n\n" + appeal_text(d, ev, why)
+    plain = f"{lead}\n\nWe collected proof from both sides before deciding, and the decision was made on that evidence.{why}"
     sent = []
     for party, name, addr in ((cat.SELLER, d.merchant_reference or "there", seller_address(d)), (cat.BUYER, d.buyer_reference or "there", buyer_address(d))):
+        if party == cat.BUYER and outcome == "SELLER_FAVOR":
+            text = (f"{lead}\n\n{why}" if revised else "") + buyer_loss_text(d, ev)
+        else:
+            text = plain
         subject = f"{'Updated decision' if revised else 'Decision'} on dispute {d.id}"
-        sent.append(queue(db, d.id, addr, subject, f"Hello {name},\n\n{lead}{body_tail}\n\nPayPal Dispute Resolution", party))
+        sent.append(queue(db, d.id, addr, subject, f"Hello {name},\n\n{text}\n\nPayPal Dispute Resolution", party))
     return sent
 
 

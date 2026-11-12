@@ -5,7 +5,7 @@ from backend.app.models.brief import InvestigationBrief, HistoricalCase
 from backend.app.models.audit import AuditEvent
 from backend.app.models.message import DisputeMessage
 from backend.app.models.meta import AppMeta
-from backend.app.models.team import User, Strike, ManagerAlert, Notification, AIReview, Flag, Email, CaseRequest, CaseCollaborator
+from backend.app.models.team import User, Strike, ManagerAlert, Notification, AIReview, AILesson, Flag, Email, CaseRequest, CaseCollaborator
 
 __all__ = [
     "Base",
@@ -24,6 +24,7 @@ __all__ = [
     "ManagerAlert",
     "Notification",
     "AIReview",
+    "AILesson",
     "Flag",
     "Email",
     "CaseRequest",
