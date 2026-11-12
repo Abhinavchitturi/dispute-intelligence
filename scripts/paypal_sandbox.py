@@ -44,7 +44,6 @@ except ImportError:  # run as ./scripts/paypal_sandbox.py with a Python that lac
 ROOT = Path(__file__).resolve().parent.parent
 STATE_FILE = ROOT / "scripts" / ".paypal_sandbox_state.json"   # gitignored: holds the saved buyer's vault token
 SANDBOX_BASE = "https://api-m.sandbox.paypal.com"
-DEMO_IMAGE = ROOT / "docs" / "demo" / "doorbell-camera-front-door.png"   # the not-received story's doorbell-camera still
 BUYER_SUMMARY_URL = "https://www.sandbox.paypal.com/myaccount/summary"
 APPROVED = ("APPROVED",)
 DONE = ("COMPLETED",)
@@ -136,16 +135,19 @@ STORIES: Dict[str, Dict[str, Any]] = {
                         "doorbell camera shows no delivery to my door that day. I checked with my neighbours and the "
                         "building mailroom too. I'd like a refund."),
         "attach": "the doorbell-camera still, docs/demo/doorbell-camera-front-door.png",
+        "image": "doorbell-camera-front-door.png",
     },
     "not-as-described": {
         "item": "Apple Watch Series 9 GPS 45mm, Midnight Aluminium",
-        "sku": "APL-WS9-45-MID", "description": "New, factory sealed, with 1-year warranty.",
+        "sku": "APL-WS9-45-MID", "description": "New, factory sealed, Midnight (black) band.",
         "amount": "329.00", "delivered": True,
         "report_choice": "I received an item or service that was different or not as described",
-        "report_text": ("The listing said new and factory sealed. The box arrived already opened, the screen has scratches, "
-                        "and the band is a different colour from the listing. It looks used. I have photos of the watch "
-                        "and the box."),
-        "attach": "a photo or two of the item (any picture works for the sandbox)",
+        "report_detail": "If PayPal asks for more detail: the option about the item being different, used or damaged",
+        "report_text": ("I ordered a new, factory-sealed Apple Watch with a Midnight (black) band. The box arrived already "
+                        "opened with the seal torn, the screen is scratched, and the band is pink. It's clearly been used. "
+                        "Photos attached. I'd like a full refund."),
+        "attach": "the photos, docs/demo/watch-as-received.png",
+        "image": "watch-as-received.png",
     },
 }
 
@@ -371,7 +373,8 @@ def main(argv=None) -> int:
             if story.get("report_detail"):
                 print(f"  Then:    {story['report_detail']}")
             print("  Write:   " + textwrap.fill(story["report_text"], 100, subsequent_indent="           "))
-            print(f"  Attach:  {story['attach']}" + (f"\n           ({DEMO_IMAGE})" if args.story == "not-received" and DEMO_IMAGE.exists() else ""))
+            image = ROOT / "docs" / "demo" / story.get("image", "")
+            print(f"  Attach:  {story['attach']}" + (f"\n           ({image})" if story.get("image") and image.exists() else ""))
         print(f"  Refund:  if PayPal asks what you want, choose a full refund; if it asks how much, type {float(args.amount):.2f}")
         print("  Then submit.")
         if args.no_wait:

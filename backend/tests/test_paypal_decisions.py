@@ -213,3 +213,17 @@ def test_a_reported_case_cant_be_reopened_only_overturned_or_kept(db):
     with pytest.raises(DecisionError, match="stays closed"):
         DecisionService.send_back(db, db.get(Dispute, CASE), "manager", "Look again at this one.")
     assert db.get(Dispute, CASE).status == "RESOLVED"
+
+
+def test_a_refused_case_is_tried_again_by_itself_once_paypal_changes_it(db, monkeypatch):
+    from datetime import datetime, timedelta
+    fake = FakePayPal(monkeypatch, fail=422, links=("self", "adjudicate"))
+    _decided(db, "SELLER_FAVOR")
+    asyncio.run(paypal_sync.push_decisions(db))
+    asyncio.run(paypal_sync.push_decisions(db))
+    assert len(fake.posts) == 1                                     # nothing changed on PayPal: no retry
+    d = db.get(Dispute, CASE)
+    d.raw_payload_reference = (datetime.utcnow() + timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")   # PayPal moved the case on
+    db.commit()
+    asyncio.run(paypal_sync.push_decisions(db))
+    assert len(fake.posts) == 2

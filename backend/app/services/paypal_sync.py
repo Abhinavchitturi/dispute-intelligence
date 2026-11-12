@@ -572,13 +572,27 @@ async def _send_decision(dispute: Dispute, revised: bool = False) -> Tuple[str, 
 async def push_decisions(db: Session, actor: str = "paypal_api", retry_refused: bool = False) -> List[str]:
     """Sends every decided PayPal case's outcome to PayPal once. Returns what happened, one line per case.
 
-    A case PayPal refused isn't tried again by the background poll; pressing Sync PayPal (retry_refused) tries it again."""
+    A case PayPal refused is tried again once PayPal changes the case; pressing Sync PayPal (retry_refused) tries it straight away."""
     if not PayPalClient.is_configured():
         return []
-    markers = [SENT] if retry_refused else [SENT, NOT_SENT]
-    last_sent: Dict[str, datetime] = {}
-    for did_, at in db.query(AuditEvent.dispute_id, AuditEvent.created_at).filter(AuditEvent.action.in_(markers)).all():
-        last_sent[did_] = max(at, last_sent.get(did_, at))
+    def latest(action: str) -> Dict[str, datetime]:
+        out: Dict[str, datetime] = {}
+        for did_, at in db.query(AuditEvent.dispute_id, AuditEvent.created_at).filter(AuditEvent.action == action).all():
+            out[did_] = max(at, out.get(did_, at))
+        return out
+    last_sent = latest(SENT)
+    last_refused = latest(NOT_SENT)
+    if not retry_refused:
+        # A refused case waits until PayPal changes it (a new stage, or PayPal settling it), then is tried again by itself.
+        # Its last PayPal update is stored on the case by the sync.
+        for did_, at in last_refused.items():
+            d = db.get(Dispute, did_)
+            try:
+                changed = _paypal_datetime(d.raw_payload_reference) if d else None
+            except PayPalSyncError:
+                changed = None
+            if not (changed and changed > at):
+                last_sent[did_] = max(at, last_sent.get(did_, at))
     last_overturn: Dict[str, datetime] = {}
     for did_, at in db.query(AuditEvent.dispute_id, AuditEvent.created_at).filter(AuditEvent.action == "DECISION_OVERTURNED").all():
         last_overturn[did_] = max(at, last_overturn.get(did_, at))

@@ -6,12 +6,12 @@ Narration is written for about 150 words a minute, so each section fits its time
 
 1. Backend in sandbox mode with Gemini on (`RESOLVEIQ_MODE=sandbox`, `AI_PROVIDER=gemini`), frontend running.
 2. Second terminal: `./scripts/paypal_webhook.py` running, so new reports arrive in seconds.
-3. Make **two** cases ahead of time with `./scripts/paypal_sandbox.py --story not-received`, report both on PayPal, and let them import:
-   - **Case A** is filmed live in section 2 and decided in section 3. Make one more on camera, or keep one unreported until then.
-   - **Case B** is for the strike in section 4.
+3. Two cases:
+   - **Case A, the headphones** (`./scripts/paypal_sandbox.py --story not-received`). Filmed live in section 2 and decided in section 3.
+   - **Case B, the Apple Watch** (`./scripts/paypal_sandbox.py --story not-as-described`). Report it beforehand and let it import. It's for the strike in section 4.
    - Cases are assigned automatically to whoever has the fewest open cases. Check the **Owner** column, and record each case signed in as its owner.
 4. Browser tabs ready: PayPal sandbox signed in as the **buyer**, ResolveIQ signed in as the cases' **investigator** (see the Owner column), and a private window signed in as **PayPal** (manager).
-5. Have `docs/demo/doorbell-camera-front-door.png` ready to upload.
+5. Have both photos ready to upload: `docs/demo/doorbell-camera-front-door.png` (Case A) and `docs/demo/watch-as-received.png` (Case B).
 
 ---
 
@@ -35,31 +35,31 @@ Narration is written for about 150 words a minute, so each section fits its time
 
 ## 1:10–2:10 · The case in ResolveIQ, start to finish
 
-**On screen (as the case's investigator):** the Disputes queue, then open Case A.
+**On screen (as the case's investigator):** open Case A from the queue.
 
-1. **Queue:** sort by Priority, type in a column filter, then click Case A.
-2. **Header and evidence tab:** amount, deadline, priority. Order, Shipment (USPS, Delivered) and Payment, all read from PayPal.
-3. **AI brief:** findings with record IDs, and the conflict: carrier says delivered, buyer's camera says no.
-4. **Take action → Ask the seller** (the AI drafts the message), then **Ask the buyer**. Show both replies arriving in Messages.
-5. **Decide in the buyer's favor**, with a reason. Show the AI reviewer approving it.
-6. Switch to the PayPal buyer tab → **Activity**: the **+$289.00 refund**.
+1. **Header and evidence tab:** amount, deadline, priority. Order, Shipment (USPS, Delivered) and Payment, all read from PayPal.
+2. **AI brief:** findings with record IDs, and the conflict: carrier says delivered, buyer's camera says no.
+3. **Take action → Ask the seller** (the AI drafts the message), then **Ask the buyer**. Show both replies arriving in Messages.
+4. **Decide in the buyer's favor**, with a reason. Show the AI reviewer approving it.
+5. Switch to the PayPal buyer tab → **Activity**: the **+$289.00 refund**.
 
-> The case was assigned to me automatically, and it sits in an AG Grid table I can sort and filter by any column. It opens with everything in one place: the order, the shipment, the payment, all pulled from PayPal's APIs. Gemini writes the brief, and every finding links back to the record it comes from. It spots the conflict straight away: USPS says delivered, but the buyer's camera shows nothing at the door.
+> The case was assigned to me automatically, and it opens with everything in one place: the order, the shipment, the payment, all pulled from PayPal's APIs. Gemini writes the brief, and every finding links back to the record it comes from. It spots the conflict straight away: USPS says delivered, but the buyer's camera shows nothing at the door.
 >
 > I ask both sides for evidence. The AI drafts each message from the case's own records, and I can edit it before sending. The replies come in, and every request is answered, so it's time to decide. I rule for the buyer. Before anything is final, the AI reviewer checks my decision against the evidence. It agrees, so ResolveIQ sends the ruling to PayPal. And on the buyer's side, the $289 refund has landed.
 
 ## 2:10–2:50 · An investigator gets a strike
 
-**On screen:** Case B, as its investigator, then the manager window.
+**On screen:** the Disputes queue (AG Grid), then Case B as its investigator, then the manager window.
 
-1. Decide Case B in the **seller's favor**, giving the reason "USPS says delivered".
-2. The AI reviewer **overturns** it: the camera footage contradicts the scan, and there's no signature. Show "This counted as a strike".
-3. Click **Report this** and write why you disagree.
-4. Manager window → **Team**: the investigator's strike bar. Open the case: it's still closed. Click **Overturn decision** or **Keep the AI decision**.
+1. **Queue:** sort by **Amount**, type "watch" in the **Case** filter (or "described"), then open Case B, the $349 Apple Watch.
+2. Decide Case B in the **seller's favor**, giving the reason "Tracking shows it was delivered".
+3. The AI reviewer **overturns** it: the buyer's photos show an opened box, a scratched screen and the wrong band. Show "This counted as a strike".
+4. Click **Report this** and write why you disagree.
+5. Manager window → **Team**: the investigator's strike bar. Open the case: it's still closed. Click **Overturn decision** or **Keep the AI decision**.
 
-> Now a wrong call. I decide this case for the seller, just because tracking says delivered. The AI reviewer overturns me: the buyer's footage contradicts the scan, and there's no signature. That counts as a strike. At three strikes, the manager is alerted; at ten, the account is blocked.
+> My queue is an AG Grid table: I sort by amount and filter any column to find my next case, this $349 Apple Watch. Now a wrong call. I decide for the seller, just because tracking says delivered. The AI reviewer overturns me: the buyer's photos show an opened box, a scratched screen and the wrong band. That's a strike. Three strikes alert the manager; ten block the account.
 >
-> If I think the AI is wrong, I can report it. The case stays closed. My manager sees both sides and the AI's reasoning, and either keeps the AI's decision or overturns it. An overturn removes my strike and teaches the AI.
+> If I disagree, I report it. The case stays closed. My manager reviews it and keeps the AI's call or overturns it, which removes my strike and teaches the AI.
 
 ## 2:50–3:00 · Close
 
@@ -72,4 +72,5 @@ Narration is written for about 150 words a minute, so each section fits its time
 **Tips:**
 - Record each section separately and join them. That makes the timings easy to hit, and you can redo one section without restarting.
 - Speed up any waiting: PayPal's checkout, or the simulated replies, which arrive after about 20 seconds.
-- If the AI reviewer surprises you on Case B (for example, it agrees with the seller's decision), make the reason weaker or pick a case with stronger buyer evidence, and record that section again.
+- If the AI reviewer agrees with your seller's-favor decision on Case B, make the reason weaker, and record that section again.
+- PayPal can take a few minutes to release a buyer's refund. Record the decision, then record the refund in the buyer's **Activity** once it lands, and cut them together.
